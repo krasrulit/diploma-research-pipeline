@@ -2,11 +2,13 @@ from __future__ import annotations
 
 import os
 import time
+from collections import Counter
 from pathlib import Path
 from typing import Any
 
 import pandas as pd
 import requests
+import urllib3
 
 from .utils import (
     camel_to_snake,
@@ -25,6 +27,8 @@ from .utils import (
 
 
 TINVEST_TOKEN_ENV = "TINVEST_TOKEN"
+TINVEST_SSL_VERIFY_ENV = "TINVEST_SSL_VERIFY"
+TINVEST_CA_BUNDLE_ENV = "TINVEST_CA_BUNDLE"
 DEFAULT_TINVEST_API_URL = "https://invest-public-api.tbank.ru/rest/tinkoff.public.invest.api.contract.v1.InstrumentsService"
 
 TINVEST_SHARES_URL = DEFAULT_TINVEST_API_URL + "/Shares"
@@ -41,6 +45,37 @@ def build_auth_headers(token: str) -> dict[str, str]:
         "Authorization": f"Bearer {token}",
         "Content-Type": "application/json",
     }
+
+
+def env_flag_is_true(name: str, default: bool = True) -> bool:
+    value = os.getenv(name, "").strip().lower()
+    if not value:
+        return default
+    return value not in {"0", "false", "no", "off"}
+
+
+def build_tinvest_session(base_session: requests.Session | None = None) -> tuple[requests.Session, str]:
+    user_agent = ""
+    if base_session is not None:
+        user_agent = clean_text(base_session.headers.get("User-Agent", ""))
+
+    session = create_session(user_agent=user_agent) if user_agent else create_session()
+    if base_session is not None:
+        session.headers.update(base_session.headers)
+        session.proxies.update(base_session.proxies)
+
+    ca_bundle = os.getenv(TINVEST_CA_BUNDLE_ENV, "").strip()
+    if ca_bundle:
+        session.verify = ca_bundle
+        return session, f"ca_bundle:{ca_bundle}"
+
+    if not env_flag_is_true(TINVEST_SSL_VERIFY_ENV, default=True):
+        session.verify = False
+        urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+        return session, "disabled"
+
+    session.verify = True
+    return session, "enabled"
 
 
 def quotation_to_float(value: dict[str, Any]) -> float | None:
@@ -117,6 +152,9 @@ def normalize_instrument_frame(
     frame = pd.DataFrame(rows)
     if "instrument_kind" not in frame.columns:
         frame["instrument_kind"] = instrument_kind.upper()
+    dedupe_subset = [column for column in ["figi", "uid", "ticker", "isin", "name", "instrument_kind_source"] if column in frame.columns]
+    if dedupe_subset:
+        frame = frame.drop_duplicates(subset=dedupe_subset, keep="first").reset_index(drop=True)
     return frame
 
 
@@ -156,6 +194,40 @@ def company_variants(company_row: pd.Series) -> list[str]:
     if isinstance(raw_variants, list) and raw_variants:
         return [clean_text(item) for item in raw_variants if clean_text(item)]
     return company_name_variants(company_row)
+
+
+def company_name_tokens(company_row: pd.Series) -> list[str]:
+    tokens: list[str] = []
+    seen: set[str] = set()
+    for variant in company_variants(company_row):
+        for token in normalize_text(strip_legal_form(variant)).split():
+            if len(token) <= 2 or token in seen:
+                continue
+            seen.add(token)
+            tokens.append(token)
+    return tokens
+
+
+def build_candidate_indexes(universe_records: list[dict[str, Any]]) -> tuple[dict[str, list[int]], dict[str, list[int]], dict[str, list[int]]]:
+    ticker_index: dict[str, list[int]] = {}
+    isin_index: dict[str, list[int]] = {}
+    token_index: dict[str, list[int]] = {}
+
+    for idx, record in enumerate(universe_records):
+        ticker = normalize_ticker(record.get("ticker", ""))
+        isin = normalize_isin(record.get("isin", ""))
+        name_tokens = set(normalize_text(record.get("name_norm", record.get("name", ""))).split())
+
+        if ticker:
+            ticker_index.setdefault(ticker, []).append(idx)
+        if isin:
+            isin_index.setdefault(isin, []).append(idx)
+        for token in name_tokens:
+            if len(token) <= 2:
+                continue
+            token_index.setdefault(token, []).append(idx)
+
+    return ticker_index, isin_index, token_index
 
 
 def score_tinvest_candidate(company_row: pd.Series, candidate_row: pd.Series) -> tuple[float, float, list[str]]:
@@ -211,13 +283,34 @@ def match_tinvest_instruments(
     instrument_rows: list[dict[str, Any]] = []
     mapping_rows: list[dict[str, Any]] = []
     universe_records = universe_df.to_dict(orient="records")
+    ticker_index, isin_index, token_index = build_candidate_indexes(universe_records)
 
     for _, company_row in companies_master.iterrows():
         company_name = clean_text(company_row.get("company_name", ""))
         company_inn = clean_text(company_row.get("inn", ""))
+        company_ticker = normalize_ticker(company_row.get("ticker", ""))
+        company_isin = normalize_isin(company_row.get("isin", ""))
+        tokens = company_name_tokens(company_row)
+
+        candidate_indices: set[int] = set()
+        if company_ticker:
+            candidate_indices.update(ticker_index.get(company_ticker, []))
+        if company_isin:
+            candidate_indices.update(isin_index.get(company_isin, []))
+
+        token_hits: Counter[int] = Counter()
+        for token in tokens:
+            for idx in token_index.get(token, []):
+                token_hits[idx] += 1
+
+        min_token_overlap = 1 if (company_ticker or company_isin) else 2
+        for idx, count in token_hits.items():
+            if count >= min_token_overlap:
+                candidate_indices.add(idx)
 
         company_candidates: list[dict[str, Any]] = []
-        for candidate in universe_records:
+        for idx in sorted(candidate_indices):
+            candidate = universe_records[idx]
             score, overlap, reasons = score_tinvest_candidate(company_row, pd.Series(candidate))
             exact_id = "isin_exact" in reasons or "ticker_exact" in reasons
             if score <= 0:
@@ -228,8 +321,8 @@ def match_tinvest_instruments(
             candidate_row = dict(candidate)
             candidate_row["company_name"] = company_name
             candidate_row["company_inn"] = company_inn
-            candidate_row["company_ticker"] = normalize_ticker(company_row.get("ticker", ""))
-            candidate_row["company_isin"] = normalize_isin(company_row.get("isin", ""))
+            candidate_row["company_ticker"] = company_ticker
+            candidate_row["company_isin"] = company_isin
             candidate_row["sample_flag"] = clean_text(company_row.get("sample_flag", ""))
             candidate_row["match_score"] = score
             candidate_row["name_overlap"] = overlap
@@ -244,6 +337,20 @@ def match_tinvest_instruments(
             key=lambda row: (row["selected_flag"], row["match_score"], row.get("name_overlap", 0.0)),
             reverse=True,
         )
+        deduped_candidates: list[dict[str, Any]] = []
+        seen_keys: set[tuple[str, str, str, str]] = set()
+        for row in company_candidates:
+            dedupe_key = (
+                clean_text(row.get("ticker", "")),
+                clean_text(row.get("isin", "")),
+                clean_text(row.get("name", "")),
+                clean_text(row.get("instrument_kind_source", "")),
+            )
+            if dedupe_key in seen_keys:
+                continue
+            seen_keys.add(dedupe_key)
+            deduped_candidates.append(row)
+        company_candidates = deduped_candidates
         instrument_rows.extend(company_candidates)
 
         selected = [row for row in company_candidates if row["selected_flag"]]
@@ -335,7 +442,7 @@ def load_tinvest_optional(
     coupon_to: str = "2035-12-31",
 ) -> dict[str, pd.DataFrame]:
     output_dir.mkdir(parents=True, exist_ok=True)
-    session = session or create_session()
+    tinvest_session, ssl_verify_mode = build_tinvest_session(session)
 
     token = get_tinvest_token()
     if not token:
@@ -359,7 +466,7 @@ def load_tinvest_optional(
 
     download_rows: list[dict[str, Any]] = []
     try:
-        shares_df = fetch_tinvest_instruments(session, token=token, instrument_kind="share")
+        shares_df = fetch_tinvest_instruments(tinvest_session, token=token, instrument_kind="share")
         download_rows.append(
             make_log_entry(
                 source="tinvest",
@@ -367,6 +474,7 @@ def load_tinvest_optional(
                 message="T-Invest shares loaded",
                 rows=len(shares_df),
                 endpoint=TINVEST_SHARES_URL,
+                ssl_verify=ssl_verify_mode,
             )
         )
     except Exception as exc:
@@ -377,12 +485,13 @@ def load_tinvest_optional(
                 status="ERROR",
                 message="Failed to load T-Invest shares",
                 endpoint=TINVEST_SHARES_URL,
+                ssl_verify=ssl_verify_mode,
                 error=str(exc),
             )
         )
 
     try:
-        bonds_df = fetch_tinvest_instruments(session, token=token, instrument_kind="bond")
+        bonds_df = fetch_tinvest_instruments(tinvest_session, token=token, instrument_kind="bond")
         download_rows.append(
             make_log_entry(
                 source="tinvest",
@@ -390,6 +499,7 @@ def load_tinvest_optional(
                 message="T-Invest bonds loaded",
                 rows=len(bonds_df),
                 endpoint=TINVEST_BONDS_URL,
+                ssl_verify=ssl_verify_mode,
             )
         )
     except Exception as exc:
@@ -400,6 +510,7 @@ def load_tinvest_optional(
                 status="ERROR",
                 message="Failed to load T-Invest bonds",
                 endpoint=TINVEST_BONDS_URL,
+                ssl_verify=ssl_verify_mode,
                 error=str(exc),
             )
         )
@@ -428,7 +539,7 @@ def load_tinvest_optional(
                 continue
             try:
                 coupon_df = fetch_bond_coupons(
-                    session=session,
+                    session=tinvest_session,
                     token=token,
                     figi=figi,
                     coupon_from=coupon_from,
@@ -450,6 +561,7 @@ def load_tinvest_optional(
                         figi=figi,
                         rows=len(coupon_df),
                         endpoint=TINVEST_BOND_COUPONS_URL,
+                        ssl_verify=ssl_verify_mode,
                     )
                 )
             except Exception as exc:
@@ -460,6 +572,7 @@ def load_tinvest_optional(
                         message="Failed to load T-Invest bond coupons",
                         figi=figi,
                         endpoint=TINVEST_BOND_COUPONS_URL,
+                        ssl_verify=ssl_verify_mode,
                         error=str(exc),
                     )
                 )

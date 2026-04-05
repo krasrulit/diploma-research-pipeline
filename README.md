@@ -37,6 +37,14 @@ TINVEST_TOKEN=ваш_read_only_token
 
 Файл `.env` уже исключен из git, поэтому токен не должен попасть в GitHub. `main_public_data.py` подхватывает `.env` автоматически при запуске.
 
+Если T-Invest в вашей сети отвечает с ошибкой SSL-сертификата, добавьте в тот же `.env`:
+
+```bash
+TINVEST_SSL_VERIFY=false
+```
+
+Это нужно только для T-Invest и только если у вас локально есть SSL interception / proxy. Более аккуратный вариант: указать путь к вашему корпоративному CA bundle в `TINVEST_CA_BUNDLE`.
+
 ## Установка
 
 ```bash
