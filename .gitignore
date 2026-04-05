@@ -4,12 +4,12 @@ __pycache__/
 vendor/
 .ipynb_checkpoints/
 ~$*.xlsx
+.env
+.env.*
+!.env.example
 
-data_raw/
-data_processed/
+data_raw/*
+!data_raw/README.md
 
-projects/**/data_raw/*
-!projects/**/data_raw/README.md
-
-projects/**/data_processed/*
-!projects/**/data_processed/README.md
+data_processed/*
+!data_processed/README.md

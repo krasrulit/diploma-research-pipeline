@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 from datetime import datetime, timezone
 from pathlib import Path
@@ -35,6 +36,25 @@ def ensure_directory(path: Path) -> Path:
     return path
 
 
+def load_env_file(path: Path) -> dict[str, str]:
+    if not path.exists():
+        return {}
+
+    loaded: dict[str, str] = {}
+    for raw_line in path.read_text(encoding="utf-8").splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, value = line.split("=", 1)
+        key = key.strip()
+        value = value.strip().strip('"').strip("'")
+        if not key or key in os.environ:
+            continue
+        os.environ[key] = value
+        loaded[key] = value
+    return loaded
+
+
 def now_utc_iso() -> str:
     return datetime.now(timezone.utc).replace(microsecond=0).isoformat()
 
@@ -65,6 +85,17 @@ def normalize_text(value: object) -> str:
 
 def normalize_column_name(value: object) -> str:
     return normalize_text(value)
+
+
+def camel_to_snake(value: str) -> str:
+    text = clean_text(value)
+    if not text:
+        return ""
+    text = text.replace("-", "_")
+    text = re.sub(r"(.)([A-Z][a-z]+)", r"\1_\2", text)
+    text = re.sub(r"([a-z0-9])([A-Z])", r"\1_\2", text)
+    text = re.sub(r"__+", "_", text)
+    return text.lower()
 
 
 def normalize_ticker(value: object) -> str:
@@ -231,6 +262,18 @@ def request_json(
     timeout: int = REQUEST_TIMEOUT,
 ) -> dict[str, object]:
     response = session.get(url, params=params, timeout=timeout)
+    response.raise_for_status()
+    return response.json()
+
+
+def request_json_post(
+    session: requests.Session,
+    url: str,
+    json_body: dict[str, object] | None = None,
+    headers: dict[str, str] | None = None,
+    timeout: int = REQUEST_TIMEOUT,
+) -> dict[str, object]:
+    response = session.post(url, json=json_body or {}, headers=headers, timeout=timeout)
     response.raise_for_status()
     return response.json()
 

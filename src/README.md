@@ -1,0 +1,39 @@
+# Source Code
+
+В этой папке лежит весь рабочий код проекта.
+
+## Модули публичного pipeline
+
+- `load_shortlist.py`
+  Читает shortlist Excel, автоматически ищет релевантные листы, нормализует `company_name`, `inn`, `ticker`, `ogrn`, `isin` и собирает `companies_master`.
+
+- `load_moex.py`
+  Работает с официальным MOEX ISS API, ищет акции и облигации, строит `moex_instruments`, `moex_bonds` и лог сопоставления.
+
+- `load_tinvest.py`
+  Работает с официальным T-Invest API, тянет `Shares` и `Bonds`, матчится с shortlist по `ticker / isin / name`, а при включенном флаге выгружает еще и купонный календарь.
+
+- `load_cbr.py`
+  Загружает ключевую ставку и инфляцию с сайта Банка России.
+
+- `load_commodities.py`
+  Находит актуальные Excel-файлы Pink Sheet на сайте World Bank и парсит месячные и годовые commodity prices.
+
+- `load_cbonds.py`
+  Опциональный источник. Работает только если заданы credentials через переменные окружения. Без них pipeline не падает.
+
+- `merge_public_data.py`
+  Главный оркестратор публичного pipeline. Собирает результаты всех loaders, сохраняет промежуточные CSV и финальный Excel.
+
+- `utils.py`
+  Общие функции: нормализация текста, HTTP, логирование, сохранение CSV, загрузка локального `.env`.
+
+## Модуль СПАРК
+
+- `spark_docx_parser.py`
+  Парсер `.docx`-отчетов СПАРК. Вытаскивает баланс, ОФР и ОДДС, строит `raw_long`, `panel_core`, `coverage`, `parse_log`.
+
+## Точки входа
+
+- [main_public_data.py](/Users/grigorijkrasovickij/Documents/Playground/main_public_data.py)
+- [main_spark.py](/Users/grigorijkrasovickij/Documents/Playground/main_spark.py)

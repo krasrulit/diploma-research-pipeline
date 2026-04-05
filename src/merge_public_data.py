@@ -9,6 +9,7 @@ from .load_cbr import load_cbr_macro
 from .load_commodities import load_world_bank_commodities
 from .load_moex import load_moex_data
 from .load_shortlist import load_shortlist
+from .load_tinvest import load_tinvest_optional
 from .utils import create_session, ensure_directory, save_dataframe_csv
 
 
@@ -22,6 +23,10 @@ def run_pipeline(
     moex_history_from: str = "2019-01-01",
     moex_history_to: str | None = None,
     with_cbonds: bool = False,
+    with_tinvest: bool = False,
+    load_tinvest_coupons: bool = False,
+    tinvest_coupon_from: str = "2010-01-01",
+    tinvest_coupon_to: str = "2035-12-31",
 ) -> dict[str, pd.DataFrame]:
     ensure_directory(processed_dir)
     ensure_directory(raw_dir)
@@ -52,6 +57,20 @@ def run_pipeline(
         raw_dir=raw_dir,
         session=session,
     )
+    tinvest_result = load_tinvest_optional(
+        companies_master=companies_master,
+        output_dir=processed_dir,
+        session=session,
+        load_coupons=load_tinvest_coupons,
+        coupon_from=tinvest_coupon_from,
+        coupon_to=tinvest_coupon_to,
+    ) if with_tinvest else {
+        "tinvest_instruments": pd.DataFrame(),
+        "tinvest_bonds": pd.DataFrame(),
+        "tinvest_bond_coupons": pd.DataFrame(),
+        "mapping_log": pd.DataFrame(),
+        "download_log": pd.DataFrame(),
+    }
     cbonds_result = load_cbonds_optional(
         output_dir=processed_dir,
         session=session,
@@ -61,12 +80,19 @@ def run_pipeline(
     }
 
     mapping_log = moex_result.get("mapping_log", pd.DataFrame())
+    if not tinvest_result.get("mapping_log", pd.DataFrame()).empty:
+        mapping_log = pd.concat(
+            [mapping_log, tinvest_result.get("mapping_log", pd.DataFrame())],
+            ignore_index=True,
+            sort=False,
+        )
     download_log = pd.concat(
         [
             shortlist_log,
             moex_result.get("download_log", pd.DataFrame()),
             cbr_result.get("download_log", pd.DataFrame()),
             commodities_result.get("download_log", pd.DataFrame()),
+            tinvest_result.get("download_log", pd.DataFrame()),
             cbonds_result.get("download_log", pd.DataFrame()),
         ],
         ignore_index=True,
@@ -77,6 +103,9 @@ def run_pipeline(
         "companies_master": companies_master,
         "moex_instruments": moex_result.get("moex_instruments", pd.DataFrame()),
         "moex_bonds": moex_result.get("moex_bonds", pd.DataFrame()),
+        "tinvest_instruments": tinvest_result.get("tinvest_instruments", pd.DataFrame()),
+        "tinvest_bonds": tinvest_result.get("tinvest_bonds", pd.DataFrame()),
+        "tinvest_bond_coupons": tinvest_result.get("tinvest_bond_coupons", pd.DataFrame()),
         "macro_cbr": cbr_result.get("macro_cbr", pd.DataFrame()),
         "commodity_prices_monthly": commodities_result.get("commodity_prices_monthly", pd.DataFrame()),
         "commodity_prices_annual": commodities_result.get("commodity_prices_annual", pd.DataFrame()),
