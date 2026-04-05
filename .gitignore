@@ -1,0 +1,15 @@
+.DS_Store
+__pycache__/
+*.py[cod]
+vendor/
+.ipynb_checkpoints/
+~$*.xlsx
+
+data_raw/
+data_processed/
+
+projects/**/data_raw/*
+!projects/**/data_raw/README.md
+
+projects/**/data_processed/*
+!projects/**/data_processed/README.md
