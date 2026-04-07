@@ -61,6 +61,21 @@ def main() -> None:
         help="End date for optional MOEX bond history.",
     )
     parser.add_argument(
+        "--moex-share-history",
+        action="store_true",
+        help="Load optional MOEX share history and save it to data_processed/moex_share_history.csv.",
+    )
+    parser.add_argument(
+        "--moex-share-history-from",
+        default=None,
+        help="Start date for optional MOEX share history. Defaults to --moex-history-from.",
+    )
+    parser.add_argument(
+        "--moex-share-history-to",
+        default=None,
+        help="End date for optional MOEX share history. Defaults to today.",
+    )
+    parser.add_argument(
         "--with-cbonds",
         action="store_true",
         help="Enable optional Cbonds loader when credentials are configured via environment variables.",
@@ -96,6 +111,9 @@ def main() -> None:
         load_moex_history=args.moex_history,
         moex_history_from=args.moex_history_from,
         moex_history_to=args.moex_history_to,
+        load_moex_share_history=args.moex_share_history,
+        moex_share_history_from=args.moex_share_history_from,
+        moex_share_history_to=args.moex_share_history_to,
         with_cbonds=args.with_cbonds,
         with_tinvest=args.with_tinvest,
         load_tinvest_coupons=args.tinvest_coupons,

@@ -197,7 +197,7 @@ def split_ids(value: object) -> set[str]:
 
 
 def rows_for_ids(frame: pd.DataFrame, company_name: str, id_columns: list[str], wanted_ids: set[str]) -> pd.DataFrame:
-    if frame.empty or not wanted_ids:
+    if frame.empty or not wanted_ids or "company_name" not in frame.columns:
         return pd.DataFrame()
     subset = frame[frame["company_name"].eq(company_name)].copy()
     if subset.empty:
@@ -276,12 +276,18 @@ def build_validated_mapping(
         wanted_ids = ids | isins
 
         if action_name == "confirm_tinvest_mapping":
-            subset = tinvest_instruments[
-                tinvest_instruments["company_name"].eq(company_name)
-                & tinvest_instruments.get("selected_flag", pd.Series(False, index=tinvest_instruments.index)).map(bool_value)
-            ].copy()
-            for _, row in subset.iterrows():
-                rows.append(normalize_mapping_row(row, "T-Invest", company_name, action))
+            if tinvest_instruments.empty or "company_name" not in tinvest_instruments.columns:
+                subset = pd.DataFrame()
+            else:
+                subset = tinvest_instruments[
+                    tinvest_instruments["company_name"].eq(company_name)
+                    & tinvest_instruments.get("selected_flag", pd.Series(False, index=tinvest_instruments.index)).map(bool_value)
+                ].copy()
+            if subset.empty and wanted_ids:
+                rows.extend(placeholder_mapping_rows(action, company_name, wanted_ids, "T-Invest"))
+            else:
+                for _, row in subset.iterrows():
+                    rows.append(normalize_mapping_row(row, "T-Invest", company_name, action))
 
         elif action_name == "use_moex_mapping_not_tinvest":
             subset = rows_for_ids(moex_instruments, company_name, ["secid", "isin"], wanted_ids)

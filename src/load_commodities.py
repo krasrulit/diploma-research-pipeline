@@ -13,7 +13,7 @@ from .utils import create_session, make_log_entry, normalize_text, request_conte
 
 WORLD_BANK_COMMODITY_PAGE = "https://www.worldbank.org/en/research/commodity-markets"
 
-TARGET_COMMODITIES = {
+TARGET_COMMODITIES_RAW = {
     "crude oil, average": "crude_oil_avg",
     "crude oil, brent": "brent",
     "crude oil, dubai": "dubai_crude",
@@ -33,6 +33,11 @@ TARGET_COMMODITIES = {
     "gold": "gold",
     "platinum": "platinum",
     "silver": "silver",
+}
+
+TARGET_COMMODITIES = {
+    normalize_text(commodity_name): commodity_code
+    for commodity_name, commodity_code in TARGET_COMMODITIES_RAW.items()
 }
 
 

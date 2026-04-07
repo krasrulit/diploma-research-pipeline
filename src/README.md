@@ -8,7 +8,7 @@
   Читает shortlist Excel, автоматически ищет релевантные листы, нормализует `company_name`, `inn`, `ticker`, `ogrn`, `isin` и собирает `companies_master`.
 
 - `load_moex.py`
-  Работает с официальным MOEX ISS API, ищет акции и облигации, строит `moex_instruments`, `moex_bonds` и лог сопоставления.
+  Работает с официальным MOEX ISS API, ищет акции и облигации, строит `moex_instruments`, `moex_bonds`, опциональные `moex_bond_history` / `moex_share_history` и лог сопоставления.
 
 - `load_tinvest.py`
   Работает с официальным T-Invest API, тянет `Shares` и `Bonds`, матчится с shortlist по `ticker / isin / name`, а при включенном флаге выгружает еще и купонный календарь.
@@ -31,6 +31,9 @@
 - `apply_manual_validation.py`
   Применяет внешний файл ручной валидации к `additional_public_data.xlsx` и собирает `additional_public_data_validated.xlsx`.
 
+- `build_public_market_workbook.py`
+  Собирает единый `public_market_data_full.xlsx` без СПАРК-отчетностей: shortlist, validated mapping, MOEX, T-Invest, CBR, commodities и compact flags по компаниям.
+
 - `utils.py`
   Общие функции: нормализация текста, HTTP, логирование, сохранение CSV, загрузка локального `.env`.
 
@@ -42,4 +45,5 @@
 ## Точки входа
 
 - [main_public_data.py](/Users/grigorijkrasovickij/Documents/Playground/main_public_data.py)
+- [main_public_market.py](/Users/grigorijkrasovickij/Documents/Playground/main_public_market.py)
 - [main_spark.py](/Users/grigorijkrasovickij/Documents/Playground/main_spark.py)

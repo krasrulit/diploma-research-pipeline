@@ -8,10 +8,13 @@
 - `additional_public_data_manual_review.xlsx` — чеклист спорных сопоставлений для внешней ручной проверки.
 - `additional_public_data_manual_review_validated.xlsx` — результат внешней ручной проверки, который не генерируется основным pipeline.
 - `additional_public_data_validated.xlsx` — workbook после применения ручной проверки к MOEX / T-Invest слоям.
+- `public_market_data_full.xlsx` — полный workbook по публичным источникам без СПАРК-отчетностей.
 - `spark_combined_report.xlsx` — итоговый workbook по DOCX-отчетам СПАРК.
 - `companies_master.csv` — нормализованный shortlist.
 - `moex_instruments.csv` — все найденные кандидаты из MOEX.
 - `moex_bonds.csv` — выбранные облигации MOEX.
+- `moex_bond_history.csv` — история торгов/доходностей MOEX по выбранным облигациям, если включена.
+- `moex_share_history.csv` — история торгов MOEX по выбранным акциям, если включена.
 - `tinvest_instruments.csv` — все найденные кандидаты из T-Invest.
 - `tinvest_bonds.csv` — выбранные облигации T-Invest.
 - `tinvest_bond_coupons.csv` — купонный календарь из T-Invest, если включен флаг.
@@ -36,3 +39,5 @@ PYTHONPATH=vendor python3 src/apply_manual_validation.py \
   --validation-workbook data_processed/additional_public_data_manual_review_validated.xlsx \
   --output data_processed/additional_public_data_validated.xlsx
 ```
+
+Для работы без отчетностей удобнее открывать `public_market_data_full.xlsx`: там есть `firm_market_flags` и все публичные слои в одном месте.

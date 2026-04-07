@@ -22,6 +22,9 @@ def run_pipeline(
     load_moex_history: bool = False,
     moex_history_from: str = "2019-01-01",
     moex_history_to: str | None = None,
+    load_moex_share_history: bool = False,
+    moex_share_history_from: str | None = None,
+    moex_share_history_to: str | None = None,
     with_cbonds: bool = False,
     with_tinvest: bool = False,
     load_tinvest_coupons: bool = False,
@@ -33,6 +36,10 @@ def run_pipeline(
     ensure_directory(output_path.parent)
 
     session = create_session()
+    if load_moex_history and moex_history_to is None:
+        moex_history_to = pd.Timestamp.utcnow().date().isoformat()
+    if load_moex_share_history and moex_share_history_to is None:
+        moex_share_history_to = pd.Timestamp.utcnow().date().isoformat()
 
     companies_master, shortlist_log = load_shortlist(shortlist_path)
     if max_companies is not None:
@@ -47,6 +54,9 @@ def run_pipeline(
         load_history=load_moex_history,
         history_from=moex_history_from,
         history_to=moex_history_to,
+        load_share_history=load_moex_share_history,
+        share_history_from=moex_share_history_from or moex_history_from,
+        share_history_to=moex_share_history_to,
     )
     cbr_result = load_cbr_macro(
         output_dir=processed_dir,
@@ -103,9 +113,12 @@ def run_pipeline(
         "companies_master": companies_master,
         "moex_instruments": moex_result.get("moex_instruments", pd.DataFrame()),
         "moex_bonds": moex_result.get("moex_bonds", pd.DataFrame()),
+        "moex_bond_history": moex_result.get("moex_bond_history", pd.DataFrame()),
+        "moex_share_history": moex_result.get("moex_share_history", pd.DataFrame()),
         "tinvest_instruments": tinvest_result.get("tinvest_instruments", pd.DataFrame()),
         "tinvest_bonds": tinvest_result.get("tinvest_bonds", pd.DataFrame()),
         "tinvest_bond_coupons": tinvest_result.get("tinvest_bond_coupons", pd.DataFrame()),
+        "cbonds_raw": cbonds_result.get("cbonds_raw", pd.DataFrame()),
         "macro_cbr": cbr_result.get("macro_cbr", pd.DataFrame()),
         "commodity_prices_monthly": commodities_result.get("commodity_prices_monthly", pd.DataFrame()),
         "commodity_prices_annual": commodities_result.get("commodity_prices_annual", pd.DataFrame()),

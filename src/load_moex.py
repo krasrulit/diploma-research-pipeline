@@ -27,6 +27,7 @@ MOEX_SECURITY_SEARCH_URL = "https://iss.moex.com/iss/securities.json"
 MOEX_BOND_DETAIL_URL = "https://iss.moex.com/iss/engines/stock/markets/bonds/securities/{secid}.json"
 MOEX_SECURITY_DESCRIPTION_URL = "https://iss.moex.com/iss/securities/{secid}.json"
 MOEX_BOND_HISTORY_URL = "https://iss.moex.com/iss/history/engines/stock/markets/bonds/securities/{secid}.json"
+MOEX_SHARE_HISTORY_URL = "https://iss.moex.com/iss/history/engines/stock/markets/shares/securities/{secid}.json"
 
 
 def build_search_terms(company_row: pd.Series) -> list[dict[str, str]]:
@@ -260,6 +261,38 @@ def fetch_bond_history(
     return pd.concat(frames, ignore_index=True)
 
 
+def fetch_share_history(
+    session: requests.Session,
+    secid: str,
+    history_from: str,
+    history_to: str,
+    page_size: int = 100,
+) -> pd.DataFrame:
+    frames = []
+    for start in range(0, 100000, page_size):
+        payload = request_json(
+            session,
+            MOEX_SHARE_HISTORY_URL.format(secid=secid),
+            params={
+                "iss.meta": "off",
+                "from": history_from,
+                "till": history_to,
+                "limit": page_size,
+                "start": start,
+            },
+        )
+        frame = dataframe_from_iss_block(payload, "history")
+        if frame.empty:
+            break
+        frame["SECID"] = secid
+        frames.append(frame)
+        if len(frame) < page_size:
+            break
+    if not frames:
+        return pd.DataFrame()
+    return pd.concat(frames, ignore_index=True)
+
+
 def load_moex_data(
     companies_master: pd.DataFrame,
     output_dir: Path,
@@ -268,6 +301,9 @@ def load_moex_data(
     load_history: bool = False,
     history_from: str = "2013-01-01",
     history_to: str | None = None,
+    load_share_history: bool = False,
+    share_history_from: str | None = None,
+    share_history_to: str | None = None,
 ) -> dict[str, pd.DataFrame]:
     output_dir.mkdir(parents=True, exist_ok=True)
     if raw_dir:
@@ -279,6 +315,7 @@ def load_moex_data(
     instrument_rows: list[pd.DataFrame] = []
     bond_detail_rows: list[pd.DataFrame] = []
     history_rows: list[pd.DataFrame] = []
+    share_history_rows: list[pd.DataFrame] = []
 
     for _, company_row in companies_master.iterrows():
         search_terms = build_search_terms(company_row)
@@ -352,6 +389,7 @@ def load_moex_data(
 
             selected = candidates.loc[candidates["selected_flag"]].copy()
             selected_bonds = selected.loc[selected["bond_flag"]].copy()
+            selected_shares = selected.loc[selected["share_flag"] & ~selected["bond_flag"]].copy()
 
             if selected.empty:
                 top_row = candidates.sort_values("match_score", ascending=False, kind="stable").head(1)
@@ -442,6 +480,54 @@ def load_moex_data(
                     )
                 time.sleep(0.05)
 
+            if load_share_history:
+                share_from = share_history_from or history_from
+                share_to = share_history_to or history_to
+                if share_to:
+                    unique_shares = selected_shares.drop_duplicates(subset=["secid"], keep="first")
+                    for _, share_row in unique_shares.iterrows():
+                        secid = share_row["secid"]
+                        try:
+                            share_history_df = fetch_share_history(
+                                session=session,
+                                secid=secid,
+                                history_from=share_from,
+                                history_to=share_to,
+                            )
+                            if not share_history_df.empty:
+                                share_history_df["company_name"] = company_name
+                                share_history_df["company_inn"] = company_inn
+                                share_history_df["sample_flag"] = company_row.get("sample_flag", "")
+                                share_history_df["match_score"] = share_row.get("match_score", np.nan)
+                                share_history_df["match_reasons"] = share_row.get("match_reasons", "")
+                                share_history_rows.append(share_history_df)
+                            download_logs.append(
+                                make_log_entry(
+                                    source="moex_share_history",
+                                    status="INFO",
+                                    message="Share history loaded",
+                                    company_name=company_name,
+                                    inn=company_inn,
+                                    secid=secid,
+                                    rows=len(share_history_df),
+                                    url=MOEX_SHARE_HISTORY_URL.format(secid=secid),
+                                )
+                            )
+                        except Exception as exc:
+                            download_logs.append(
+                                make_log_entry(
+                                    source="moex_share_history",
+                                    status="ERROR",
+                                    message="Share history failed",
+                                    company_name=company_name,
+                                    inn=company_inn,
+                                    secid=secid,
+                                    url=MOEX_SHARE_HISTORY_URL.format(secid=secid),
+                                    error=str(exc),
+                                )
+                            )
+                        time.sleep(0.05)
+
         else:
             mapping_logs.append(
                 make_log_entry(
@@ -456,6 +542,7 @@ def load_moex_data(
     moex_instruments = pd.concat(instrument_rows, ignore_index=True) if instrument_rows else pd.DataFrame()
     moex_bonds = pd.concat(bond_detail_rows, ignore_index=True) if bond_detail_rows else pd.DataFrame()
     moex_history = pd.concat(history_rows, ignore_index=True) if history_rows else pd.DataFrame()
+    moex_share_history = pd.concat(share_history_rows, ignore_index=True) if share_history_rows else pd.DataFrame()
     mapping_log = pd.DataFrame(mapping_logs)
     download_log = pd.DataFrame(download_logs)
 
@@ -465,6 +552,8 @@ def load_moex_data(
         save_dataframe_csv(moex_bonds, output_dir / "moex_bonds.csv")
     if load_history and not moex_history.empty:
         save_dataframe_csv(moex_history, output_dir / "moex_bond_history.csv")
+    if load_share_history and not moex_share_history.empty:
+        save_dataframe_csv(moex_share_history, output_dir / "moex_share_history.csv")
     if not mapping_log.empty:
         save_dataframe_csv(mapping_log, output_dir / "mapping_log_moex.csv")
 
@@ -472,6 +561,7 @@ def load_moex_data(
         "moex_instruments": moex_instruments,
         "moex_bonds": moex_bonds,
         "moex_bond_history": moex_history,
+        "moex_share_history": moex_share_history,
         "mapping_log": mapping_log,
         "download_log": download_log,
     }
