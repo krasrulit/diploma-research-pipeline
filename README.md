@@ -83,6 +83,20 @@ python main_spark.py \
   --output "/Users/grigorijkrasovickij/Documents/Playground/data_processed/spark_combined_report.xlsx"
 ```
 
+## Запуск 3. Применить ручную валидацию мэппинга
+
+После проверки спорных совпадений в `additional_public_data_manual_review_validated.xlsx` можно собрать отдельный workbook, где решения ручной проверки применены к MOEX / T-Invest слоям:
+
+```bash
+cd /Users/grigorijkrasovickij/Documents/Playground
+PYTHONPATH=vendor python3 src/apply_manual_validation.py \
+  --main-workbook "/Users/grigorijkrasovickij/Documents/Playground/data_processed/additional_public_data.xlsx" \
+  --validation-workbook "/Users/grigorijkrasovickij/Documents/Playground/data_processed/additional_public_data_manual_review_validated.xlsx" \
+  --output "/Users/grigorijkrasovickij/Documents/Playground/data_processed/additional_public_data_validated.xlsx"
+```
+
+Для анализа после ручной проверки используйте прежде всего лист `issuer_mapping_validated` в `additional_public_data_validated.xlsx`.
+
 ## Что лежит в `additional_public_data.xlsx`
 
 - `companies_master` — нормализованный shortlist компаний.
@@ -96,6 +110,17 @@ python main_spark.py \
 - `commodity_prices_annual` — годовые commodity prices из World Bank Pink Sheet.
 - `mapping_log` — лог сопоставления компаний с инструментами.
 - `download_log` — технический лог загрузок и пропусков.
+
+## Что лежит в `additional_public_data_validated.xlsx`
+
+- `validation_summary` — компактная статистика ручной проверки.
+- `validated_company_actions` — все 21 проверенное решение с флагами действий.
+- `issuer_mapping_validated` — очищенная таблица подтвержденных / рекомендованных инструментов после ручной проверки.
+- `tinvest_instruments_validated` — T-Invest кандидаты с флагами ручной проверки.
+- `tinvest_bonds_validated` — T-Invest облигации с флагами ручной проверки.
+- `moex_instruments_validated` — MOEX кандидаты с флагами ручной проверки.
+- `moex_bonds_validated` — MOEX облигации с флагами ручной проверки.
+- `manual_validation_checks` — исходный лист `validated_checks` из файла ручной проверки.
 
 ## Что лежит в `spark_combined_report.xlsx`
 

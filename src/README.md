@@ -25,6 +25,12 @@
 - `merge_public_data.py`
   Главный оркестратор публичного pipeline. Собирает результаты всех loaders, сохраняет промежуточные CSV и финальный Excel.
 
+- `build_manual_review_workbook.py`
+  Собирает Excel-чеклист спорных MOEX / T-Invest сопоставлений для ручной проверки.
+
+- `apply_manual_validation.py`
+  Применяет внешний файл ручной валидации к `additional_public_data.xlsx` и собирает `additional_public_data_validated.xlsx`.
+
 - `utils.py`
   Общие функции: нормализация текста, HTTP, логирование, сохранение CSV, загрузка локального `.env`.
 
