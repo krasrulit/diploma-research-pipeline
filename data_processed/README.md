@@ -10,6 +10,7 @@
 - `additional_public_data_validated.xlsx` — workbook после применения ручной проверки к MOEX / T-Invest слоям.
 - `public_market_data_full.xlsx` — полный workbook по публичным источникам без СПАРК-отчетностей.
 - `spark_combined_report.xlsx` — итоговый workbook по DOCX-отчетам СПАРК.
+- `spark_combined_report_2014q3_2025q4.xlsx` — вариант СПАРК workbook с квартальной сеткой `2014Q3–2025Q4` по всем компаниям из входной папки.
 - `companies_master.csv` — нормализованный shortlist.
 - `moex_instruments.csv` — все найденные кандидаты из MOEX.
 - `moex_bonds.csv` — выбранные облигации MOEX.
@@ -41,3 +42,5 @@ PYTHONPATH=vendor python3 src/apply_manual_validation.py \
 ```
 
 Для работы без отчетностей удобнее открывать `public_market_data_full.xlsx`: там есть `firm_market_flags` и все публичные слои в одном месте.
+
+Для отчетностей по СПАРК удобнее открывать `spark_combined_report_2014q3_2025q4.xlsx`: там есть `panel_quarterly`, где каждая компания разложена по всем кварталам диапазона, а пропуски оставлены пустыми.

@@ -109,6 +109,8 @@ CORE_METRIC_NAME_PATTERNS = [
     ),
 ]
 
+SUPPORTED_SPARK_SUFFIXES = {".docx"}
+
 
 @dataclass
 class ParseResult:
@@ -131,6 +133,25 @@ def normalize_text(value: object) -> str:
 def normalize_code(value: object) -> str:
     code = re.sub(r"\D+", "", clean_text(value))
     return code
+
+
+def join_unique(values: pd.Series) -> str:
+    seen: set[str] = set()
+    result: list[str] = []
+    for value in values.dropna().astype(str):
+        text = clean_text(value)
+        if not text or text in seen:
+            continue
+        seen.add(text)
+        result.append(text)
+    return ", ".join(result)
+
+
+def first_notna(values: pd.Series) -> object:
+    for value in values:
+        if pd.notna(value):
+            return value
+    return np.nan
 
 
 def is_number_like(value: object) -> bool:
@@ -165,6 +186,60 @@ def parse_filename(path: Path) -> tuple[str, str]:
     company = match.group(1).replace("_", " ").strip()
     inn = match.group(2)
     return company, inn
+
+
+def build_input_inventory(input_dir: Path) -> pd.DataFrame:
+    rows: list[dict[str, object]] = []
+    for path in sorted(input_dir.glob("СПАРК-Отчет_*")):
+        if not path.is_file():
+            continue
+        company, inn = parse_filename(path)
+        rows.append(
+            {
+                "source_file": path.name,
+                "source_path": str(path.resolve()),
+                "source_ext": path.suffix.lower(),
+                "supported_flag": path.suffix.lower() in SUPPORTED_SPARK_SUFFIXES,
+                "company": company,
+                "inn": inn,
+            }
+        )
+    return pd.DataFrame(rows)
+
+
+def parse_quarter_token(value: str) -> tuple[int, str]:
+    text = clean_text(value).upper()
+    match = re.fullmatch(r"(\d{4})\s*Q([1-4])", text)
+    if not match:
+        raise ValueError(f"Некорректный квартальный токен: {value}")
+    return int(match.group(1)), f"Q{match.group(2)}"
+
+
+def quarter_rank(period_type: str) -> int:
+    return {"Q1": 1, "Q2": 2, "Q3": 3, "Q4": 4}.get(clean_text(period_type), 0)
+
+
+def iter_quarters(start_period: str, end_period: str) -> list[tuple[int, str]]:
+    start_year, start_quarter = parse_quarter_token(start_period)
+    end_year, end_quarter = parse_quarter_token(end_period)
+    current_year = start_year
+    current_rank = quarter_rank(start_quarter)
+    end_rank = quarter_rank(end_quarter)
+    periods: list[tuple[int, str]] = []
+
+    while (current_year < end_year) or (current_year == end_year and current_rank <= end_rank):
+        period_type = f"Q{current_rank}"
+        periods.append((current_year, period_type))
+        current_rank += 1
+        if current_rank > 4:
+            current_rank = 1
+            current_year += 1
+
+    return periods
+
+
+def quarter_label(year: int, period_type: str) -> str:
+    return f"{int(year)}{clean_text(period_type)}"
 
 
 def parse_period_label(label: str) -> tuple[object, object]:
@@ -812,12 +887,189 @@ def build_coverage(raw_long: pd.DataFrame) -> pd.DataFrame:
     )
 
 
+def normalize_panel_to_quarters(panel_core: pd.DataFrame) -> pd.DataFrame:
+    if panel_core.empty:
+        columns = [
+            "company",
+            "inn",
+            "report_year",
+            "period_type",
+            "quarter_label",
+            "source_file",
+            "source_report_period",
+            "source_period_type",
+            "data_source",
+            "unit",
+        ] + CORE_METRIC_COLUMNS
+        return pd.DataFrame(columns=columns)
+
+    panel = panel_core.copy()
+    panel = panel.loc[panel["report_year"].notna()].copy()
+    panel["report_year"] = panel["report_year"].astype(int)
+    panel["period_type_quarter"] = panel["period_type"].replace({"FY": "Q4"})
+    panel = panel.loc[panel["period_type_quarter"].isin(["Q1", "Q2", "Q3", "Q4"])].copy()
+    if panel.empty:
+        return pd.DataFrame()
+
+    panel["period_priority"] = np.where(panel["period_type"].eq(panel["period_type_quarter"]), 0, 1)
+    panel = panel.sort_values(
+        ["company", "report_year", "period_type_quarter", "period_priority", "source_file"],
+        kind="stable",
+    )
+
+    group_columns = ["company", "inn", "report_year", "period_type_quarter"]
+    aggregated = (
+        panel.groupby(group_columns, dropna=False)
+        .agg(
+            source_file=("source_file", join_unique),
+            source_report_period=("report_period", join_unique),
+            source_period_type=("period_type", join_unique),
+            data_source=("data_source", join_unique),
+            unit=("unit", join_unique),
+            **{column: (column, first_notna) for column in CORE_METRIC_COLUMNS},
+        )
+        .reset_index()
+        .rename(columns={"period_type_quarter": "period_type"})
+    )
+    aggregated["quarter_label"] = aggregated.apply(
+        lambda row: quarter_label(int(row["report_year"]), clean_text(row["period_type"])),
+        axis=1,
+    )
+    return aggregated
+
+
+def normalize_coverage_to_quarters(coverage: pd.DataFrame) -> pd.DataFrame:
+    if coverage.empty:
+        columns = [
+            "company",
+            "inn",
+            "report_year",
+            "period_type",
+            "coverage_source_files",
+            "n_tables",
+            "n_metrics_current",
+            "n_values_total",
+            "has_balance",
+            "has_pnl",
+            "has_cash_flow",
+        ]
+        return pd.DataFrame(columns=columns)
+
+    coverage_quarter = coverage.copy()
+    coverage_quarter = coverage_quarter.loc[coverage_quarter["report_year"].notna()].copy()
+    coverage_quarter["report_year"] = coverage_quarter["report_year"].astype(int)
+    coverage_quarter["period_type_quarter"] = coverage_quarter["period_type"].replace({"FY": "Q4"})
+    coverage_quarter = coverage_quarter.loc[
+        coverage_quarter["period_type_quarter"].isin(["Q1", "Q2", "Q3", "Q4"])
+    ].copy()
+    if coverage_quarter.empty:
+        return pd.DataFrame()
+
+    aggregated = (
+        coverage_quarter.groupby(["company", "inn", "report_year", "period_type_quarter"], dropna=False)
+        .agg(
+            coverage_source_files=("source_file", join_unique),
+            n_tables=("n_tables", "max"),
+            n_metrics_current=("n_metrics_current", "max"),
+            n_values_total=("n_values_total", "max"),
+            has_balance=("has_balance", "max"),
+            has_pnl=("has_pnl", "max"),
+            has_cash_flow=("has_cash_flow", "max"),
+        )
+        .reset_index()
+        .rename(columns={"period_type_quarter": "period_type"})
+    )
+    return aggregated
+
+
+def build_quarterly_panel(
+    panel_core: pd.DataFrame,
+    coverage: pd.DataFrame,
+    input_inventory: pd.DataFrame,
+    start_period: str,
+    end_period: str,
+) -> pd.DataFrame:
+    if input_inventory.empty:
+        company_universe = panel_core[["company", "inn"]].drop_duplicates().copy()
+    else:
+        company_universe = input_inventory[["company", "inn"]].drop_duplicates().copy()
+
+    if company_universe.empty:
+        columns = [
+            "company",
+            "inn",
+            "report_year",
+            "period_type",
+            "quarter_label",
+            "source_file",
+            "source_report_period",
+            "source_period_type",
+            "data_source",
+            "unit",
+            "coverage_source_files",
+            "n_tables",
+            "n_metrics_current",
+            "n_values_total",
+            "has_balance",
+            "has_pnl",
+            "has_cash_flow",
+        ] + CORE_METRIC_COLUMNS
+        return pd.DataFrame(columns=columns)
+
+    periods = iter_quarters(start_period=start_period, end_period=end_period)
+    grid_rows: list[dict[str, object]] = []
+    for _, company_row in company_universe.iterrows():
+        for report_year, period_type in periods:
+            grid_rows.append(
+                {
+                    "company": company_row["company"],
+                    "inn": company_row["inn"],
+                    "report_year": report_year,
+                    "period_type": period_type,
+                    "quarter_label": quarter_label(report_year, period_type),
+                }
+            )
+    grid = pd.DataFrame(grid_rows)
+
+    normalized_panel = normalize_panel_to_quarters(panel_core)
+    normalized_coverage = normalize_coverage_to_quarters(coverage)
+
+    output = grid.merge(
+        normalized_panel,
+        on=["company", "inn", "report_year", "period_type", "quarter_label"],
+        how="left",
+    ).merge(
+        normalized_coverage,
+        on=["company", "inn", "report_year", "period_type"],
+        how="left",
+    )
+
+    for column in ["has_balance", "has_pnl", "has_cash_flow", "n_tables", "n_metrics_current", "n_values_total"]:
+        if column not in output.columns:
+            output[column] = np.nan
+    for column in ["has_balance", "has_pnl", "has_cash_flow", "n_tables", "n_metrics_current", "n_values_total"]:
+        output[column] = output[column].fillna(0).astype(int)
+    for column in ["source_file", "source_report_period", "source_period_type", "data_source", "unit", "coverage_source_files"]:
+        if column not in output.columns:
+            output[column] = ""
+        output[column] = output[column].fillna("")
+
+    return output.sort_values(
+        ["company", "report_year", "period_type"],
+        key=lambda s: s.map(quarter_rank) if s.name == "period_type" else s,
+        kind="stable",
+    ).reset_index(drop=True)
+
+
 def build_combined_report(
     docx_folder: Path,
     output_file: Path,
     pattern: str = "СПАРК-Отчет_*.docx",
+    quarter_grid_start: str = "2014Q3",
+    quarter_grid_end: str = "2025Q4",
 ) -> dict[str, pd.DataFrame]:
     parser = SparkDocxParser()
+    input_inventory = build_input_inventory(docx_folder)
     files = sorted(docx_folder.glob(pattern))
     if not files:
         raise FileNotFoundError(f"Не найдено файлов по шаблону: {pattern}")
@@ -848,19 +1100,47 @@ def build_combined_report(
     raw_long = ensure_raw_long_columns(raw_long)
     parse_log = pd.concat(log_frames, ignore_index=True) if log_frames else pd.DataFrame()
 
+    if not input_inventory.empty:
+        unsupported = input_inventory.loc[~input_inventory["supported_flag"]].copy()
+        if not unsupported.empty:
+            unsupported_logs = unsupported.apply(
+                lambda row: build_log_row(
+                    source_file=row["source_file"],
+                    level="INFO",
+                    event="file_skipped_unsupported",
+                    message="Файл пропущен: формат пока не поддерживается текущим парсером",
+                    company=row["company"],
+                    inn=row["inn"],
+                    source_ext=row["source_ext"],
+                ),
+                axis=1,
+            ).tolist()
+            parse_log = pd.concat([parse_log, pd.DataFrame(unsupported_logs)], ignore_index=True)
+
     panel_core = build_panel_core(raw_long)
     coverage = build_coverage(raw_long)
+    panel_quarterly = build_quarterly_panel(
+        panel_core=panel_core,
+        coverage=coverage,
+        input_inventory=input_inventory,
+        start_period=quarter_grid_start,
+        end_period=quarter_grid_end,
+    )
 
     output_file.parent.mkdir(parents=True, exist_ok=True)
     with pd.ExcelWriter(output_file, engine="openpyxl") as writer:
+        input_inventory.to_excel(writer, sheet_name="input_inventory", index=False)
         raw_long.to_excel(writer, sheet_name="raw_long", index=False)
         panel_core.to_excel(writer, sheet_name="panel_core", index=False)
+        panel_quarterly.to_excel(writer, sheet_name="panel_quarterly", index=False)
         coverage.to_excel(writer, sheet_name="coverage", index=False)
         parse_log.to_excel(writer, sheet_name="parse_log", index=False)
 
     return {
+        "input_inventory": input_inventory,
         "raw_long": raw_long,
         "panel_core": panel_core,
+        "panel_quarterly": panel_quarterly,
         "coverage": coverage,
         "parse_log": parse_log,
     }
@@ -887,6 +1167,16 @@ def main(argv: list[str] | None = None) -> None:
         default=Path("spark_combined_report.xlsx"),
         help="Путь к выходному Excel-файлу.",
     )
+    cli.add_argument(
+        "--quarter-grid-start",
+        default="2014Q3",
+        help="Начало квартальной сетки для panel_quarterly, например 2014Q3.",
+    )
+    cli.add_argument(
+        "--quarter-grid-end",
+        default="2025Q4",
+        help="Конец квартальной сетки для panel_quarterly, например 2025Q4.",
+    )
     if argv is None and "ipykernel" in sys.modules:
         argv = []
 
@@ -896,11 +1186,15 @@ def main(argv: list[str] | None = None) -> None:
         docx_folder=args.input_dir,
         output_file=args.output,
         pattern=args.pattern,
+        quarter_grid_start=args.quarter_grid_start,
+        quarter_grid_end=args.quarter_grid_end,
     )
     print(f"Готово: {args.output}")
     print(f"Файлов: {len(sorted(args.input_dir.glob(args.pattern)))}")
+    print(f"Строк input_inventory: {len(results['input_inventory'])}")
     print(f"Строк raw_long: {len(results['raw_long'])}")
     print(f"Строк panel_core: {len(results['panel_core'])}")
+    print(f"Строк panel_quarterly: {len(results['panel_quarterly'])}")
     print(f"Строк coverage: {len(results['coverage'])}")
     print(f"Строк parse_log: {len(results['parse_log'])}")
 

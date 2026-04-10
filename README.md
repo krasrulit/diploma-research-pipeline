@@ -114,6 +114,8 @@ cd /Users/grigorijkrasovickij/Documents/Playground
 python main_spark.py \
   --input-dir "/Users/grigorijkrasovickij/4 крус/Диплом" \
   --pattern "СПАРК-Отчет_*.docx" \
+  --quarter-grid-start 2014Q3 \
+  --quarter-grid-end 2025Q4 \
   --output "/Users/grigorijkrasovickij/Documents/Playground/data_processed/spark_combined_report.xlsx"
 ```
 
@@ -170,10 +172,14 @@ PYTHONPATH=vendor python3 src/apply_manual_validation.py \
 
 ## Что лежит в `spark_combined_report.xlsx`
 
+- `input_inventory` — список всех найденных файлов СПАРК в папке, включая неподдержанные форматы.
 - `raw_long` — все извлеченные строки в длинном формате.
 - `panel_core` — панель по ключевым финансовым метрикам.
+- `panel_quarterly` — квартальная сетка по всем компаниям и кварталам заданного диапазона; пропуски остаются пустыми.
 - `coverage` — покрытие форм по компании и периоду.
 - `parse_log` — лог парсинга DOCX.
+
+Если в папке со СПАРК лежат `pdf`, текущий парсер их не читает, но добавляет в `input_inventory` и пишет в `parse_log`, что файл пропущен как неподдержанный.
 
 ## Официальные источники
 
