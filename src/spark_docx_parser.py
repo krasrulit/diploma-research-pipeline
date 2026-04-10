@@ -15,6 +15,7 @@ import pandas as pd
 
 
 W_NS = {"w": "http://schemas.openxmlformats.org/wordprocessingml/2006/main"}
+SPARK_REPORT_STEM_RE = re.compile(r"СПАРК[-_]Отчет_(.+)_(\d{10})_\d{8}_\d+$")
 
 TARGET_TABLE_TITLES = {
     "бухгалтерский баланс": "Бухгалтерский баланс",
@@ -180,7 +181,7 @@ def to_number(value: object) -> float:
 
 
 def parse_filename(path: Path) -> tuple[str, str]:
-    match = re.match(r"СПАРК-Отчет_(.+)_(\d{10})_\d{8}_\d+", path.stem)
+    match = SPARK_REPORT_STEM_RE.match(path.stem)
     if not match:
         return path.stem, ""
     company = match.group(1).replace("_", " ").strip()
@@ -190,8 +191,10 @@ def parse_filename(path: Path) -> tuple[str, str]:
 
 def build_input_inventory(input_dir: Path) -> pd.DataFrame:
     rows: list[dict[str, object]] = []
-    for path in sorted(input_dir.glob("СПАРК-Отчет_*")):
+    for path in sorted(input_dir.iterdir()):
         if not path.is_file():
+            continue
+        if not SPARK_REPORT_STEM_RE.match(path.stem):
             continue
         company, inn = parse_filename(path)
         rows.append(
@@ -992,7 +995,12 @@ def build_quarterly_panel(
     if input_inventory.empty:
         company_universe = panel_core[["company", "inn"]].drop_duplicates().copy()
     else:
-        company_universe = input_inventory[["company", "inn"]].drop_duplicates().copy()
+        inventory_for_grid = input_inventory.copy()
+        if "supported_flag" in inventory_for_grid.columns:
+            supported_inventory = inventory_for_grid.loc[inventory_for_grid["supported_flag"]].copy()
+            if not supported_inventory.empty:
+                inventory_for_grid = supported_inventory
+        company_universe = inventory_for_grid[["company", "inn"]].drop_duplicates().copy()
 
     if company_universe.empty:
         columns = [
@@ -1070,7 +1078,16 @@ def build_combined_report(
 ) -> dict[str, pd.DataFrame]:
     parser = SparkDocxParser()
     input_inventory = build_input_inventory(docx_folder)
-    files = sorted(docx_folder.glob(pattern))
+    if pattern in {"СПАРК-Отчет_*.docx", "СПАРК*Отчет_*.docx"}:
+        files = sorted(
+            path
+            for path in docx_folder.iterdir()
+            if path.is_file()
+            and path.suffix.lower() == ".docx"
+            and SPARK_REPORT_STEM_RE.match(path.stem)
+        )
+    else:
+        files = sorted(docx_folder.glob(pattern))
     if not files:
         raise FileNotFoundError(f"Не найдено файлов по шаблону: {pattern}")
 
@@ -1190,8 +1207,10 @@ def main(argv: list[str] | None = None) -> None:
         quarter_grid_end=args.quarter_grid_end,
     )
     print(f"Готово: {args.output}")
-    print(f"Файлов: {len(sorted(args.input_dir.glob(args.pattern)))}")
     print(f"Строк input_inventory: {len(results['input_inventory'])}")
+    if not results["input_inventory"].empty:
+        docx_count = int(results["input_inventory"]["source_ext"].eq(".docx").sum())
+        print(f"Файлов docx: {docx_count}")
     print(f"Строк raw_long: {len(results['raw_long'])}")
     print(f"Строк panel_core: {len(results['panel_core'])}")
     print(f"Строк panel_quarterly: {len(results['panel_quarterly'])}")
