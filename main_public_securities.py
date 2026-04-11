@@ -13,6 +13,7 @@ from src.build_analysis_panel import (
 )
 from src.build_public_securities_workbook import (
     build_public_securities_outputs,
+    read_csv_if_exists,
     write_public_securities_workbook,
 )
 from src.load_moex import load_moex_data
@@ -60,6 +61,11 @@ def main() -> None:
         help="Directory for downloaded raw files.",
     )
     parser.add_argument("--max-companies", type=int, default=None, help="Optional cap for smoke tests.")
+    parser.add_argument(
+        "--skip-download",
+        action="store_true",
+        help="Reuse already downloaded sidecar CSVs from --processed-dir and only rebuild the workbook.",
+    )
     parser.add_argument(
         "--disable-tinvest-ssl-verify",
         action="store_true",
@@ -119,61 +125,104 @@ def main() -> None:
     save_dataframe_csv(companies_master, args.processed_dir / "companies_master.csv")
     save_dataframe_csv(shortlist_log, args.processed_dir / "shortlist_log.csv")
 
-    session = create_session()
-    history_to = args.history_to or pd.Timestamp.utcnow().date().isoformat()
+    history_to = args.history_to or pd.Timestamp.now("UTC").date().isoformat()
 
-    moex_result = load_moex_data(
-        companies_master=companies_master,
-        output_dir=args.processed_dir,
-        raw_dir=args.raw_dir,
-        session=session,
-        load_history=not args.no_moex_bond_history,
-        history_from=args.history_from,
-        history_to=history_to,
-        load_share_history=not args.no_moex_share_history,
-        share_history_from=args.history_from,
-        share_history_to=history_to,
-        bond_detail_scope="history_candidates",
-        bond_history_scope="history_candidates",
-        share_history_scope="history_candidates",
-    )
+    if args.skip_download:
+        moex_result = {
+            "moex_instruments": read_csv_if_exists(args.processed_dir / "moex_instruments.csv"),
+            "moex_bonds": read_csv_if_exists(args.processed_dir / "moex_bonds.csv"),
+            "moex_bond_history": read_csv_if_exists(args.processed_dir / "moex_bond_history.csv"),
+            "moex_share_history": read_csv_if_exists(args.processed_dir / "moex_share_history.csv"),
+            "mapping_log": read_csv_if_exists(args.processed_dir / "mapping_log_moex.csv"),
+            "download_log": read_csv_if_exists(args.processed_dir / "download_log.csv"),
+        }
+        tinvest_result = {
+            "tinvest_instruments": read_csv_if_exists(args.processed_dir / "tinvest_instruments.csv"),
+            "tinvest_bonds": read_csv_if_exists(args.processed_dir / "tinvest_bonds.csv"),
+            "tinvest_bond_coupons": read_csv_if_exists(args.processed_dir / "tinvest_bond_coupons.csv"),
+            "tinvest_history": read_csv_if_exists(args.processed_dir / "tinvest_history.csv"),
+            "mapping_log": read_csv_if_exists(args.processed_dir / "mapping_log_tinvest.csv"),
+            "download_log": read_csv_if_exists(args.processed_dir / "download_log_tinvest.csv"),
+        }
+        mapping_log = pd.concat(
+            [
+                moex_result.get("mapping_log", pd.DataFrame()),
+                tinvest_result.get("mapping_log", pd.DataFrame()),
+            ],
+            ignore_index=True,
+            sort=False,
+        )
+        download_log = pd.concat(
+            [
+                shortlist_log,
+                moex_result.get("download_log", pd.DataFrame()),
+                tinvest_result.get("download_log", pd.DataFrame()),
+            ],
+            ignore_index=True,
+            sort=False,
+        )
+    else:
+        session = create_session()
 
-    tinvest_result = load_tinvest_optional(
-        companies_master=companies_master,
-        output_dir=args.processed_dir,
-        session=session,
-        load_coupons=not args.no_tinvest_coupons,
-        coupon_from=args.history_from,
-        coupon_to=history_to,
-        load_history=(not args.no_tinvest) and (not args.no_tinvest_history),
-        history_from=args.history_from,
-        history_to=history_to,
-    ) if not args.no_tinvest else {
-        "tinvest_instruments": pd.DataFrame(),
-        "tinvest_bonds": pd.DataFrame(),
-        "tinvest_bond_coupons": pd.DataFrame(),
-        "tinvest_history": pd.DataFrame(),
-        "mapping_log": pd.DataFrame(),
-        "download_log": pd.DataFrame(),
-    }
+        moex_result = load_moex_data(
+            companies_master=companies_master,
+            output_dir=args.processed_dir,
+            raw_dir=args.raw_dir,
+            session=session,
+            load_history=not args.no_moex_bond_history,
+            history_from=args.history_from,
+            history_to=history_to,
+            load_share_history=not args.no_moex_share_history,
+            share_history_from=args.history_from,
+            share_history_to=history_to,
+            bond_detail_scope="history_candidates",
+            bond_history_scope="history_candidates",
+            share_history_scope="history_candidates",
+        )
 
-    mapping_log = pd.concat(
-        [
-            moex_result.get("mapping_log", pd.DataFrame()),
-            tinvest_result.get("mapping_log", pd.DataFrame()),
-        ],
-        ignore_index=True,
-        sort=False,
-    )
-    download_log = pd.concat(
-        [
-            shortlist_log,
-            moex_result.get("download_log", pd.DataFrame()),
-            tinvest_result.get("download_log", pd.DataFrame()),
-        ],
-        ignore_index=True,
-        sort=False,
-    )
+        tinvest_result = load_tinvest_optional(
+            companies_master=companies_master,
+            output_dir=args.processed_dir,
+            session=session,
+            load_coupons=not args.no_tinvest_coupons,
+            coupon_from=args.history_from,
+            coupon_to=history_to,
+            load_history=(not args.no_tinvest) and (not args.no_tinvest_history),
+            history_from=args.history_from,
+            history_to=history_to,
+        ) if not args.no_tinvest else {
+            "tinvest_instruments": pd.DataFrame(),
+            "tinvest_bonds": pd.DataFrame(),
+            "tinvest_bond_coupons": pd.DataFrame(),
+            "tinvest_history": pd.DataFrame(),
+            "mapping_log": pd.DataFrame(),
+            "download_log": pd.DataFrame(),
+        }
+
+        mapping_log = pd.concat(
+            [
+                moex_result.get("mapping_log", pd.DataFrame()),
+                tinvest_result.get("mapping_log", pd.DataFrame()),
+            ],
+            ignore_index=True,
+            sort=False,
+        )
+        download_log = pd.concat(
+            [
+                shortlist_log,
+                moex_result.get("download_log", pd.DataFrame()),
+                tinvest_result.get("download_log", pd.DataFrame()),
+            ],
+            ignore_index=True,
+            sort=False,
+        )
+
+        save_dataframe_csv(mapping_log, args.processed_dir / "mapping_log.csv")
+        save_dataframe_csv(download_log, args.processed_dir / "download_log.csv")
+        if not tinvest_result.get("mapping_log", pd.DataFrame()).empty:
+            save_dataframe_csv(tinvest_result["mapping_log"], args.processed_dir / "mapping_log_tinvest.csv")
+        if not tinvest_result.get("download_log", pd.DataFrame()).empty:
+            save_dataframe_csv(tinvest_result["download_log"], args.processed_dir / "download_log_tinvest.csv")
 
     outputs = build_public_securities_outputs(
         companies_master=companies_master,

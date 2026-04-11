@@ -101,6 +101,26 @@ def fetch_search_candidates(
     return pd.concat(frames, ignore_index=True)
 
 
+def query_has_exact_identifier_match(company_row: pd.Series, frame: pd.DataFrame) -> bool:
+    if frame.empty:
+        return False
+
+    company_inn = normalize_identifier(company_row.get("inn", ""), length=10)
+    company_ticker = normalize_ticker(company_row.get("ticker", ""))
+    company_isin = normalize_isin(company_row.get("isin", ""))
+
+    candidate_emitent_inn = frame.get("emitent_inn", pd.Series(index=frame.index, dtype="object")).map(
+        lambda value: normalize_identifier(value, length=10)
+    )
+    candidate_ticker = frame.get("secid", pd.Series(index=frame.index, dtype="object")).map(normalize_ticker)
+    candidate_isin = frame.get("isin", pd.Series(index=frame.index, dtype="object")).map(normalize_isin)
+
+    emitent_match = company_inn and candidate_emitent_inn.eq(company_inn).any()
+    ticker_match = company_ticker and candidate_ticker.eq(company_ticker).any()
+    isin_match = company_isin and candidate_isin.eq(company_isin).any()
+    return bool(emitent_match or ticker_match or isin_match)
+
+
 def token_overlap_score(company_name: str, candidate_text: str) -> float:
     company_tokens = set(normalize_text(strip_legal_form(company_name)).split())
     candidate_tokens = set(normalize_text(candidate_text).split())
@@ -307,6 +327,10 @@ def load_moex_data(
     bond_detail_scope: str = "selected",
     bond_history_scope: str = "selected",
     share_history_scope: str = "selected",
+    max_name_queries: int = 2,
+    identifier_max_pages: int = 1,
+    name_max_pages: int = 2,
+    stop_name_queries_on_exact_match: bool = True,
 ) -> dict[str, pd.DataFrame]:
     output_dir.mkdir(parents=True, exist_ok=True)
     if raw_dir:
@@ -319,23 +343,58 @@ def load_moex_data(
     bond_detail_rows: list[pd.DataFrame] = []
     history_rows: list[pd.DataFrame] = []
     share_history_rows: list[pd.DataFrame] = []
+    query_cache: dict[tuple[str, int], pd.DataFrame] = {}
 
     for _, company_row in companies_master.iterrows():
         search_terms = build_search_terms(company_row)
+        identifier_terms = [term for term in search_terms if term["query_type"] in {"isin", "ticker", "inn"}]
+        name_terms = [term for term in search_terms if term["query_type"] == "name"][:max_name_queries]
+        ordered_terms = identifier_terms + name_terms
         company_candidates = []
         company_name = company_row.get("company_name", "")
         company_inn = company_row.get("inn", "")
+        exact_identifier_found = False
 
-        for term in search_terms:
+        for term_idx, term in enumerate(ordered_terms):
+            if (
+                exact_identifier_found
+                and stop_name_queries_on_exact_match
+                and term["query_type"] == "name"
+            ):
+                download_logs.append(
+                    make_log_entry(
+                        source="moex",
+                        status="INFO",
+                        message="MOEX name search skipped after exact identifier match",
+                        company_name=company_name,
+                        inn=company_inn,
+                        query=term["query"],
+                        query_type=term["query_type"],
+                    )
+                )
+                continue
+
             query = term["query"]
+            max_pages = identifier_max_pages if term["query_type"] in {"isin", "ticker", "inn"} else name_max_pages
+            cache_key = (query, max_pages)
             try:
-                frame = fetch_search_candidates(session, query=query)
+                if cache_key in query_cache:
+                    frame = query_cache[cache_key].copy()
+                else:
+                    frame = fetch_search_candidates(
+                        session,
+                        query=query,
+                        max_pages=max_pages,
+                    )
+                    query_cache[cache_key] = frame.copy()
                 if not frame.empty:
                     frame["query"] = query
                     frame["query_type"] = term["query_type"]
                     frame["company_name"] = company_name
                     frame["company_inn"] = company_inn
                     company_candidates.append(frame)
+                    if query_has_exact_identifier_match(company_row, frame):
+                        exact_identifier_found = True
                 download_logs.append(
                     make_log_entry(
                         source="moex",
@@ -347,6 +406,8 @@ def load_moex_data(
                         query_type=term["query_type"],
                         rows=0 if frame.empty else len(frame),
                         url=MOEX_SECURITY_SEARCH_URL,
+                        max_pages=max_pages,
+                        search_order=term_idx + 1,
                     )
                 )
             except Exception as exc:
@@ -360,10 +421,12 @@ def load_moex_data(
                         query=query,
                         query_type=term["query_type"],
                         url=MOEX_SECURITY_SEARCH_URL,
+                        max_pages=max_pages,
+                        search_order=term_idx + 1,
                         error=str(exc),
                     )
                 )
-            time.sleep(0.05)
+            time.sleep(0.01)
 
         if company_candidates:
             candidates = pd.concat(company_candidates, ignore_index=True)
@@ -524,7 +587,7 @@ def load_moex_data(
                             error=str(exc),
                         )
                     )
-                time.sleep(0.05)
+                time.sleep(0.01)
 
             if load_share_history:
                 share_from = share_history_from or history_from
@@ -572,7 +635,7 @@ def load_moex_data(
                                     error=str(exc),
                                 )
                             )
-                        time.sleep(0.05)
+                        time.sleep(0.01)
 
         else:
             mapping_logs.append(

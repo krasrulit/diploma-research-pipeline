@@ -11,6 +11,7 @@ from .utils import clean_text, ensure_directory, normalize_identifier, normalize
 
 
 EXCEL_ROW_LIMIT = 1_000_000
+PRACTICAL_WORKBOOK_ROW_LIMIT = 150_000
 
 
 def bool_value(value: object) -> bool:
@@ -107,6 +108,15 @@ def coalesce_meta_columns(frame: pd.DataFrame, columns: list[str]) -> pd.DataFra
     if drop_cols:
         out = out.drop(columns=drop_cols)
     return out
+
+
+def read_csv_if_exists(path: Path) -> pd.DataFrame:
+    if not path.exists():
+        return pd.DataFrame()
+    try:
+        return pd.read_csv(path, low_memory=False)
+    except pd.errors.EmptyDataError:
+        return pd.DataFrame()
 
 
 def security_group_key(company_inn: str, instrument_type: str, ticker: str, isin: str, instrument_name: str) -> str:
@@ -537,6 +547,26 @@ def prepare_moex_history(
         ],
         on=["source", "source_instrument_id"],
         how="left",
+        suffixes=("", "_meta"),
+    )
+    history = coalesce_meta_columns(
+        history,
+        [
+            "company_id",
+            "company_name",
+            "company_inn",
+            "sector",
+            "sample_flag",
+            "ticker",
+            "isin",
+            "instrument_name",
+            "canonical_security_key",
+            "ticker_collision_key",
+            "match_score",
+            "match_confidence",
+            "selected_flag",
+            "exact_identifier_match",
+        ],
     )
     keep_cols = [
         "source",
@@ -619,6 +649,26 @@ def prepare_tinvest_history(
         ],
         on=["source", "source_instrument_id"],
         how="left",
+        suffixes=("", "_meta"),
+    )
+    history = coalesce_meta_columns(
+        history,
+        [
+            "company_id",
+            "company_name",
+            "company_inn",
+            "sector",
+            "sample_flag",
+            "ticker",
+            "isin",
+            "instrument_name",
+            "canonical_security_key",
+            "ticker_collision_key",
+            "match_score",
+            "match_confidence",
+            "selected_flag",
+            "exact_identifier_match",
+        ],
     )
     keep_cols = [
         "source",
@@ -660,6 +710,10 @@ def build_security_history_coverage(
     if base.empty:
         return pd.DataFrame()
 
+    base["company_inn"] = base["company_inn"].map(lambda value: normalize_identifier(value, length=10))
+    base["source"] = base["source"].map(clean_text)
+    base["source_instrument_id"] = base["source_instrument_id"].map(clean_text)
+    base["canonical_security_key"] = base["canonical_security_key"].map(clean_text)
     base["match_score"] = pd.to_numeric(base.get("match_score"), errors="coerce")
     base = base.drop_duplicates(subset=["company_inn", "source", "source_instrument_id"], keep="first")
 
@@ -682,6 +736,10 @@ def build_security_history_coverage(
         return coverage
 
     history = security_history_all.copy()
+    history["company_inn"] = history["company_inn"].map(lambda value: normalize_identifier(value, length=10))
+    history["source"] = history["source"].map(clean_text)
+    history["source_instrument_id"] = history["source_instrument_id"].map(clean_text)
+    history["canonical_security_key"] = history["canonical_security_key"].map(clean_text)
     history["trade_date"] = pd.to_datetime(history["trade_date"], errors="coerce")
     history = history.loc[history["trade_date"].notna()].copy()
     history["trade_day"] = history["trade_date"].dt.normalize()
@@ -710,7 +768,7 @@ def build_security_history_coverage(
     grouped["close_fill_rate"] = np.where(grouped["n_rows"].gt(0), grouped["n_close_nonnull"] / grouped["n_rows"], 0.0)
     grouped["volume_fill_rate"] = np.where(grouped["n_rows"].gt(0), grouped["n_volume_nonnull"] / grouped["n_rows"], 0.0)
     grouped["value_fill_rate"] = np.where(grouped["n_rows"].gt(0), grouped["n_value_nonnull"] / grouped["n_rows"], 0.0)
-    cutoff = pd.Timestamp.utcnow().normalize() - pd.Timedelta(days=365)
+    cutoff = pd.Timestamp.now("UTC").tz_localize(None).normalize() - pd.Timedelta(days=365)
     grouped["has_recent_data_flag"] = grouped["history_end"].ge(cutoff)
 
     trade_score = np.clip(grouped["n_trade_dates"] / 750.0, 0.0, 1.0)
@@ -1087,7 +1145,7 @@ def write_public_securities_workbook(
     workbook_sheet_names: list[str] = []
 
     for sheet_name, frame in outputs.items():
-        if sheet_name == "security_history_all" and len(frame) > EXCEL_ROW_LIMIT:
+        if len(frame) > PRACTICAL_WORKBOOK_ROW_LIMIT:
             save_dataframe_csv(frame, processed_dir / f"{sheet_name}.csv")
             continue
         if len(frame) > EXCEL_ROW_LIMIT:
