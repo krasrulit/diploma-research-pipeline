@@ -10,6 +10,7 @@
 - [main_public_data.py](/Users/grigorijkrasovickij/Documents/Playground/main_public_data.py) — основной entrypoint для публичных источников.
 - [main_public_market.py](/Users/grigorijkrasovickij/Documents/Playground/main_public_market.py) — полный public-market workbook без СПАРК-отчетностей.
 - [main_spark.py](/Users/grigorijkrasovickij/Documents/Playground/main_spark.py) — entrypoint для парсинга отчетов СПАРК.
+- [main_analysis_panel.py](/Users/grigorijkrasovickij/Documents/Playground/main_analysis_panel.py) — сборка объединенного SPARK-workbook по секторам и итоговой исследовательской панели.
 - [src/README.md](/Users/grigorijkrasovickij/Documents/Playground/src/README.md) — подробная карта модулей и того, что делает каждый файл.
 - [data_raw/README.md](/Users/grigorijkrasovickij/Documents/Playground/data_raw/README.md) — что хранить в сыром виде.
 - [data_processed/README.md](/Users/grigorijkrasovickij/Documents/Playground/data_processed/README.md) — какие итоговые файлы появляются после запуска.
@@ -133,6 +134,20 @@ PYTHONPATH=vendor python3 src/apply_manual_validation.py \
 
 Для анализа после ручной проверки используйте прежде всего лист `issuer_mapping_validated` в `additional_public_data_validated.xlsx`.
 
+## Запуск 4. Объединить нефтегаз + металлургию в исследовательскую панель
+
+```bash
+cd /Users/grigorijkrasovickij/Documents/Playground
+PYTHONPATH=vendor python3 main_analysis_panel.py \
+  --oil-gas-shortlist "/Users/grigorijkrasovickij/4 крус/Диплом/Нефтегазовые_компании_shortlist.xlsx" \
+  --metallurgy-shortlist "/Users/grigorijkrasovickij/4 крус/Диплом/Металлургические_компании_shortlist.xlsx" \
+  --oil-gas-spark "/Users/grigorijkrasovickij/Documents/Playground/data_processed/spark_neftegaz_report_2014q3_2025q4.xlsx" \
+  --metallurgy-spark "/Users/grigorijkrasovickij/Documents/Playground/data_processed/spark_metallurgy_report_2014q3_2025q4.xlsx" \
+  --public-market "/Users/grigorijkrasovickij/Documents/Playground/data_processed/public_market_data_full.xlsx" \
+  --spark-output "/Users/grigorijkrasovickij/Documents/Playground/data_processed/spark_sector_combined_2014q3_2025q4.xlsx" \
+  --analysis-output "/Users/grigorijkrasovickij/Documents/Playground/data_processed/analysis_panel.xlsx"
+```
+
 ## Что лежит в `additional_public_data.xlsx`
 
 - `companies_master` — нормализованный shortlist компаний.
@@ -180,6 +195,22 @@ PYTHONPATH=vendor python3 src/apply_manual_validation.py \
 - `parse_log` — лог парсинга DOCX.
 
 Если в папке со СПАРК лежат `pdf`, текущий парсер их не читает, но добавляет в `input_inventory` и пишет в `parse_log`, что файл пропущен как неподдержанный.
+
+## Что лежит в `spark_sector_combined_2014q3_2025q4.xlsx`
+
+- `companies_master` — объединенный shortlist нефтегаза и металлургии с `sector`, `sample_flag`, `sample_main_flag`, `sample_extended_flag`.
+- `input_inventory` — объединенный инвентарь файлов SPARK по обоим секторам.
+- `panel_core`, `panel_quarterly`, `coverage`, `parse_log` — те же SPARK-слои, но уже с признаками сектора и выборки.
+- `shortlist_coverage`, `shortlist_coverage_summary` — что из shortlist закрыто отчетностями, а что отсутствует.
+
+## Что лежит в `analysis_panel.xlsx`
+
+- `analysis_panel_quarterly` — основной исследовательский лист: финансовые показатели СПАРК + `sector` + `sample_flag` + квартальные макро/commodity признаки + доступные public-market flags.
+- `companies_master` — объединенный master-список компаний.
+- `spark_panel_quarterly`, `spark_panel_core`, `spark_input_inventory`, `spark_coverage` — исходные SPARK-слои до последних merge-шагов.
+- `macro_quarterly` — квартальные макро- и commodity-фичи.
+- `shortlist_coverage`, `shortlist_coverage_summary` — покрытие shortlist.
+- `parse_log` — объединенный лог SPARK-парсинга.
 
 ## Официальные источники
 
