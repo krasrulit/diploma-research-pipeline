@@ -15,6 +15,8 @@
 - `spark_metallurgy_report_2014q3_2025q4.xlsx` — металлургический SPARK workbook.
 - `spark_sector_combined_2014q3_2025q4.xlsx` — объединенный SPARK workbook по обоим секторам с признаками `sector` и `sample_flag`.
 - `analysis_panel.xlsx` — итоговая исследовательская квартальная панель.
+- `model_ready_quarterly.xlsx` — квартальная панель для эконометрики.
+- `model_ready_annual.xlsx` — годовая панель для эконометрики на основе `Q4` наблюдений.
 - `companies_master.csv` — нормализованный shortlist.
 - `moex_instruments.csv` — все найденные кандидаты из MOEX.
 - `moex_bonds.csv` — выбранные облигации MOEX.
@@ -50,3 +52,5 @@ PYTHONPATH=vendor python3 src/apply_manual_validation.py \
 Для отчетностей по СПАРК удобнее открывать `spark_combined_report_2014q3_2025q4.xlsx`: там есть `panel_quarterly`, где каждая компания разложена по всем кварталам диапазона, а пропуски оставлены пустыми.
 
 Для межотраслевого анализа удобнее открывать `analysis_panel.xlsx`: там уже объединены нефтегаз и металлургия, добавлены `sector`, `sample_flag`, квартальные макро- и commodity-признаки, а для нефтегаза еще и public-market flags из открытых источников.
+
+Если уже переходите к моделям, удобнее начинать с `model_ready_quarterly.xlsx` и `model_ready_annual.xlsx`: там оставлены только аналитические переменные, а в отдельных листах лежат `summary` и `variable_dictionary`.

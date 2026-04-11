@@ -11,6 +11,7 @@
 - [main_public_market.py](/Users/grigorijkrasovickij/Documents/Playground/main_public_market.py) — полный public-market workbook без СПАРК-отчетностей.
 - [main_spark.py](/Users/grigorijkrasovickij/Documents/Playground/main_spark.py) — entrypoint для парсинга отчетов СПАРК.
 - [main_analysis_panel.py](/Users/grigorijkrasovickij/Documents/Playground/main_analysis_panel.py) — сборка объединенного SPARK-workbook по секторам и итоговой исследовательской панели.
+- [main_model_ready.py](/Users/grigorijkrasovickij/Documents/Playground/main_model_ready.py) — финальный слой `model_ready_quarterly.xlsx` и `model_ready_annual.xlsx`.
 - [src/README.md](/Users/grigorijkrasovickij/Documents/Playground/src/README.md) — подробная карта модулей и того, что делает каждый файл.
 - [data_raw/README.md](/Users/grigorijkrasovickij/Documents/Playground/data_raw/README.md) — что хранить в сыром виде.
 - [data_processed/README.md](/Users/grigorijkrasovickij/Documents/Playground/data_processed/README.md) — какие итоговые файлы появляются после запуска.
@@ -148,6 +149,16 @@ PYTHONPATH=vendor python3 main_analysis_panel.py \
   --analysis-output "/Users/grigorijkrasovickij/Documents/Playground/data_processed/analysis_panel.xlsx"
 ```
 
+## Запуск 5. Построить model-ready файлы
+
+```bash
+cd /Users/grigorijkrasovickij/Documents/Playground
+PYTHONPATH=vendor python3 main_model_ready.py \
+  --analysis-panel "/Users/grigorijkrasovickij/Documents/Playground/data_processed/analysis_panel.xlsx" \
+  --quarterly-output "/Users/grigorijkrasovickij/Documents/Playground/data_processed/model_ready_quarterly.xlsx" \
+  --annual-output "/Users/grigorijkrasovickij/Documents/Playground/data_processed/model_ready_annual.xlsx"
+```
+
 ## Что лежит в `additional_public_data.xlsx`
 
 - `companies_master` — нормализованный shortlist компаний.
@@ -211,6 +222,12 @@ PYTHONPATH=vendor python3 main_analysis_panel.py \
 - `macro_quarterly` — квартальные макро- и commodity-фичи.
 - `shortlist_coverage`, `shortlist_coverage_summary` — покрытие shortlist.
 - `parse_log` — объединенный лог SPARK-парсинга.
+
+## Что лежит в `model_ready_quarterly.xlsx` и `model_ready_annual.xlsx`
+
+- `panel` — итоговая панель для эконометрики: идентификаторы, sector/sample flags, финансовые уровни, derived ratios, public-market flags, квартальные макро- и commodity-признаки.
+- `summary` — компактная сводка по строкам, компаниям и заполненности.
+- `variable_dictionary` — словарь переменных для последующего моделирования.
 
 ## Официальные источники
 

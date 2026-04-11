@@ -37,6 +37,9 @@
 - `build_analysis_panel.py`
   Собирает объединенный SPARK-workbook по нефтегазу и металлургии, добавляет `sector` и `sample_flag`, подтягивает квартальные макро/commodity признаки и формирует итоговый `analysis_panel.xlsx`.
 
+- `build_model_ready_panels.py`
+  Берет `analysis_panel.xlsx` и формирует два финальных датасета для эконометрики: `model_ready_quarterly.xlsx` и `model_ready_annual.xlsx`.
+
 - `utils.py`
   Общие функции: нормализация текста, HTTP, логирование, сохранение CSV, загрузка локального `.env`.
 
@@ -51,3 +54,4 @@
 - [main_public_market.py](/Users/grigorijkrasovickij/Documents/Playground/main_public_market.py)
 - [main_spark.py](/Users/grigorijkrasovickij/Documents/Playground/main_spark.py)
 - [main_analysis_panel.py](/Users/grigorijkrasovickij/Documents/Playground/main_analysis_panel.py)
+- [main_model_ready.py](/Users/grigorijkrasovickij/Documents/Playground/main_model_ready.py)
