@@ -1,0 +1,204 @@
+from __future__ import annotations
+
+import argparse
+import os
+from pathlib import Path
+
+import pandas as pd
+
+from src.build_analysis_panel import (
+    DEFAULT_METALLURGY_SHORTLIST,
+    DEFAULT_OIL_GAS_SHORTLIST,
+    combine_shortlists,
+)
+from src.build_public_securities_workbook import (
+    build_public_securities_outputs,
+    write_public_securities_workbook,
+)
+from src.load_moex import load_moex_data
+from src.load_tinvest import load_tinvest_optional
+from src.utils import create_session, ensure_directory, load_env_file, save_dataframe_csv
+
+
+PROJECT_ROOT = Path(__file__).resolve().parent
+
+
+def main() -> None:
+    load_env_file(PROJECT_ROOT / ".env")
+
+    parser = argparse.ArgumentParser(
+        description="Collect MOEX and T-Invest securities data for all oil&gas and metallurgy companies.",
+    )
+    parser.add_argument(
+        "--oil-gas-shortlist",
+        type=Path,
+        default=DEFAULT_OIL_GAS_SHORTLIST,
+        help="Path to the oil&gas shortlist workbook.",
+    )
+    parser.add_argument(
+        "--metallurgy-shortlist",
+        type=Path,
+        default=DEFAULT_METALLURGY_SHORTLIST,
+        help="Path to the metallurgy shortlist workbook.",
+    )
+    parser.add_argument(
+        "--output",
+        type=Path,
+        default=PROJECT_ROOT / "data_processed" / "public_securities_all_companies.xlsx",
+        help="Final workbook with unified securities metadata and coverage.",
+    )
+    parser.add_argument(
+        "--processed-dir",
+        type=Path,
+        default=PROJECT_ROOT / "data_processed" / "public_securities_all",
+        help="Directory for processed sidecar CSV files.",
+    )
+    parser.add_argument(
+        "--raw-dir",
+        type=Path,
+        default=PROJECT_ROOT / "data_raw",
+        help="Directory for downloaded raw files.",
+    )
+    parser.add_argument("--max-companies", type=int, default=None, help="Optional cap for smoke tests.")
+    parser.add_argument(
+        "--disable-tinvest-ssl-verify",
+        action="store_true",
+        help="Disable SSL verification for T-Invest in this run.",
+    )
+    parser.add_argument(
+        "--no-tinvest",
+        action="store_true",
+        help="Disable T-Invest loading even when token is configured.",
+    )
+    parser.add_argument(
+        "--no-tinvest-history",
+        action="store_true",
+        help="Skip T-Invest historical candles.",
+    )
+    parser.add_argument(
+        "--no-tinvest-coupons",
+        action="store_true",
+        help="Skip T-Invest coupon schedule.",
+    )
+    parser.add_argument(
+        "--no-moex-bond-history",
+        action="store_true",
+        help="Skip MOEX bond history.",
+    )
+    parser.add_argument(
+        "--no-moex-share-history",
+        action="store_true",
+        help="Skip MOEX share history.",
+    )
+    parser.add_argument(
+        "--history-from",
+        default="2014-07-01",
+        help="History start date for both MOEX and T-Invest.",
+    )
+    parser.add_argument(
+        "--history-to",
+        default=None,
+        help="History end date. Defaults to today.",
+    )
+    args = parser.parse_args()
+
+    if args.disable_tinvest_ssl_verify:
+        os.environ["TINVEST_SSL_VERIFY"] = "false"
+
+    ensure_directory(args.processed_dir)
+    ensure_directory(args.raw_dir)
+    ensure_directory(args.output.parent)
+
+    companies_master, shortlist_log = combine_shortlists(
+        oil_gas_shortlist=args.oil_gas_shortlist,
+        metallurgy_shortlist=args.metallurgy_shortlist,
+    )
+    if args.max_companies is not None:
+        companies_master = companies_master.head(args.max_companies).copy()
+
+    save_dataframe_csv(companies_master, args.processed_dir / "companies_master.csv")
+    save_dataframe_csv(shortlist_log, args.processed_dir / "shortlist_log.csv")
+
+    session = create_session()
+    history_to = args.history_to or pd.Timestamp.utcnow().date().isoformat()
+
+    moex_result = load_moex_data(
+        companies_master=companies_master,
+        output_dir=args.processed_dir,
+        raw_dir=args.raw_dir,
+        session=session,
+        load_history=not args.no_moex_bond_history,
+        history_from=args.history_from,
+        history_to=history_to,
+        load_share_history=not args.no_moex_share_history,
+        share_history_from=args.history_from,
+        share_history_to=history_to,
+        bond_detail_scope="history_candidates",
+        bond_history_scope="history_candidates",
+        share_history_scope="history_candidates",
+    )
+
+    tinvest_result = load_tinvest_optional(
+        companies_master=companies_master,
+        output_dir=args.processed_dir,
+        session=session,
+        load_coupons=not args.no_tinvest_coupons,
+        coupon_from=args.history_from,
+        coupon_to=history_to,
+        load_history=(not args.no_tinvest) and (not args.no_tinvest_history),
+        history_from=args.history_from,
+        history_to=history_to,
+    ) if not args.no_tinvest else {
+        "tinvest_instruments": pd.DataFrame(),
+        "tinvest_bonds": pd.DataFrame(),
+        "tinvest_bond_coupons": pd.DataFrame(),
+        "tinvest_history": pd.DataFrame(),
+        "mapping_log": pd.DataFrame(),
+        "download_log": pd.DataFrame(),
+    }
+
+    mapping_log = pd.concat(
+        [
+            moex_result.get("mapping_log", pd.DataFrame()),
+            tinvest_result.get("mapping_log", pd.DataFrame()),
+        ],
+        ignore_index=True,
+        sort=False,
+    )
+    download_log = pd.concat(
+        [
+            shortlist_log,
+            moex_result.get("download_log", pd.DataFrame()),
+            tinvest_result.get("download_log", pd.DataFrame()),
+        ],
+        ignore_index=True,
+        sort=False,
+    )
+
+    outputs = build_public_securities_outputs(
+        companies_master=companies_master,
+        moex_instruments=moex_result.get("moex_instruments", pd.DataFrame()),
+        moex_bonds=moex_result.get("moex_bonds", pd.DataFrame()),
+        moex_bond_history=moex_result.get("moex_bond_history", pd.DataFrame()),
+        moex_share_history=moex_result.get("moex_share_history", pd.DataFrame()),
+        tinvest_instruments=tinvest_result.get("tinvest_instruments", pd.DataFrame()),
+        tinvest_bonds=tinvest_result.get("tinvest_bonds", pd.DataFrame()),
+        tinvest_bond_coupons=tinvest_result.get("tinvest_bond_coupons", pd.DataFrame()),
+        tinvest_history=tinvest_result.get("tinvest_history", pd.DataFrame()),
+        mapping_log=mapping_log,
+        download_log=download_log,
+    )
+    workbook_outputs, inventory = write_public_securities_workbook(
+        outputs=outputs,
+        output_workbook=args.output,
+        processed_dir=args.processed_dir,
+    )
+
+    print(f"Public securities workbook created: {args.output}")
+    for sheet_name, frame in workbook_outputs.items():
+        print(f"{sheet_name}: {len(frame)} rows")
+    print(f"Sheets inventory rows: {len(inventory)}")
+
+
+if __name__ == "__main__":
+    main()

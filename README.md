@@ -9,6 +9,7 @@
 
 - [main_public_data.py](/Users/grigorijkrasovickij/Documents/Playground/main_public_data.py) — основной entrypoint для публичных источников.
 - [main_public_market.py](/Users/grigorijkrasovickij/Documents/Playground/main_public_market.py) — полный public-market workbook без СПАРК-отчетностей.
+- [main_public_securities.py](/Users/grigorijkrasovickij/Documents/Playground/main_public_securities.py) — расширенный security-universe pipeline по всем компаниям: MOEX + T-Invest, history coverage, source resolution и manual review по бумагам.
 - [main_spark.py](/Users/grigorijkrasovickij/Documents/Playground/main_spark.py) — entrypoint для парсинга отчетов СПАРК.
 - [main_analysis_panel.py](/Users/grigorijkrasovickij/Documents/Playground/main_analysis_panel.py) — сборка объединенного SPARK-workbook по секторам и итоговой исследовательской панели.
 - [main_model_ready.py](/Users/grigorijkrasovickij/Documents/Playground/main_model_ready.py) — финальный слой `model_ready_quarterly.xlsx` и `model_ready_annual.xlsx`.
@@ -109,6 +110,37 @@ PYTHONPATH=vendor python3 main_public_market.py \
   --disable-tinvest-ssl-verify
 ```
 
+## Запуск 1C. Полный security-universe по всем компаниям
+
+Этот режим собирает именно слой по акциям и облигациям для обеих выборок сразу: нефтегаз + металлургия. На выходе получается единый workbook, где есть:
+
+- `security_master_all` — все релевантные share/bond инструменты из MOEX и T-Invest;
+- `security_history_coverage` — покрытие истории по каждому инструменту и источнику;
+- `security_source_resolution` — какой источник брать как основной по каждой бумаге;
+- `security_manual_review` — конфликтные тикеры и источники, которые лучше сверить руками;
+- `company_security_summary` — компактная сводка по компаниям.
+
+Команда:
+
+```bash
+cd /Users/grigorijkrasovickij/Documents/Playground
+PYTHONPATH=vendor python3 main_public_securities.py \
+  --oil-gas-shortlist "/Users/grigorijkrasovickij/4 крус/Диплом/Нефтегазовые_компании_shortlist.xlsx" \
+  --metallurgy-shortlist "/Users/grigorijkrasovickij/4 крус/Диплом/Металлургические_компании_shortlist.xlsx" \
+  --disable-tinvest-ssl-verify \
+  --output "/Users/grigorijkrasovickij/Documents/Playground/data_processed/public_securities_all_companies.xlsx"
+```
+
+Если нужен только быстрый smoke-test:
+
+```bash
+cd /Users/grigorijkrasovickij/Documents/Playground
+PYTHONPATH=vendor python3 main_public_securities.py \
+  --max-companies 25 \
+  --disable-tinvest-ssl-verify \
+  --output "/Users/grigorijkrasovickij/Documents/Playground/data_processed/public_securities_smoke.xlsx"
+```
+
 ## Запуск 2. СПАРК DOCX
 
 ```bash
@@ -195,6 +227,18 @@ PYTHONPATH=vendor python3 main_model_ready.py \
 - `macro_cbr` — ключевая ставка и инфляция.
 - `commodity_prices_monthly`, `commodity_prices_annual` — World Bank Pink Sheet: нефть, газ, уголь, железная руда и металлы.
 - `mapping_log`, `download_log` — контроль качества загрузки и сопоставлений.
+
+## Что лежит в `public_securities_all_companies.xlsx`
+
+- `companies_master` — объединенный shortlist нефтегаза и металлургии.
+- `security_master_all` — единый справочник акций и облигаций, найденных в MOEX и T-Invest по всем компаниям.
+- `security_history_coverage` — количество дат, span истории, заполненность `close/volume/value`, recent-data flag и общий `coverage_score` по каждой бумаге и источнику.
+- `security_source_resolution` — выбор основного источника по каждой бумаге с учетом coverage; здесь же лежит `manual_review_needed_flag`.
+- `security_manual_review` — кейсы, где один тикер ведет к нескольким реальным инструментам или у двух источников почти одинаковое покрытие.
+- `company_security_summary` — сводка по всем 174 компаниям: сколько бумаг найдено, сколько из них с историей, сколько групп требуют ручной сверки.
+- `moex_instruments_all`, `moex_bonds_all`, `tinvest_instruments_all`, `tinvest_bonds_selected`, `tinvest_bond_coupons` — исходные рыночные слои до финального resolution.
+- `security_history_moex`, `security_history_tinvest`, `security_history_all` — long-form history sheets, если они помещаются в Excel-лимит. В любом случае эти же таблицы сохраняются как CSV sidecars в `data_processed/public_securities_all/`.
+- `mapping_log`, `download_log`, `sheet_inventory` — контроль загрузки, ошибок API и того, какие таблицы были реально записаны в workbook.
 
 ## Что лежит в `spark_combined_report.xlsx`
 

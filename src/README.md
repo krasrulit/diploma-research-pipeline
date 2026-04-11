@@ -34,6 +34,9 @@
 - `build_public_market_workbook.py`
   Собирает единый `public_market_data_full.xlsx` без СПАРК-отчетностей: shortlist, validated mapping, MOEX, T-Invest, CBR, commodities и compact flags по компаниям.
 
+- `build_public_securities_workbook.py`
+  Собирает единый security-universe workbook по всем компаниям: нормализует MOEX + T-Invest инструменты, считает history coverage, строит `security_source_resolution`, выделяет `security_manual_review` и сохраняет sidecar CSV по большим history-таблицам.
+
 - `build_analysis_panel.py`
   Собирает объединенный SPARK-workbook по нефтегазу и металлургии, добавляет `sector` и `sample_flag`, подтягивает квартальные макро/commodity признаки и формирует итоговый `analysis_panel.xlsx`.
 
@@ -52,6 +55,7 @@
 
 - [main_public_data.py](/Users/grigorijkrasovickij/Documents/Playground/main_public_data.py)
 - [main_public_market.py](/Users/grigorijkrasovickij/Documents/Playground/main_public_market.py)
+- [main_public_securities.py](/Users/grigorijkrasovickij/Documents/Playground/main_public_securities.py)
 - [main_spark.py](/Users/grigorijkrasovickij/Documents/Playground/main_spark.py)
 - [main_analysis_panel.py](/Users/grigorijkrasovickij/Documents/Playground/main_analysis_panel.py)
 - [main_model_ready.py](/Users/grigorijkrasovickij/Documents/Playground/main_model_ready.py)

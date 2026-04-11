@@ -304,6 +304,9 @@ def load_moex_data(
     load_share_history: bool = False,
     share_history_from: str | None = None,
     share_history_to: str | None = None,
+    bond_detail_scope: str = "selected",
+    bond_history_scope: str = "selected",
+    share_history_scope: str = "selected",
 ) -> dict[str, pd.DataFrame]:
     output_dir.mkdir(parents=True, exist_ok=True)
     if raw_dir:
@@ -369,6 +372,15 @@ def load_moex_data(
             candidates["match_score"] = [item[0] for item in scores_and_reasons]
             candidates["match_reasons"] = [",".join(item[1]) for item in scores_and_reasons]
             candidates["confidence"] = candidates["match_score"].map(confidence_from_score)
+            candidates["emitent_inn_exact"] = (
+                candidates["emitent_inn"].fillna("") == normalize_identifier(company_inn, length=10)
+            ) & candidates["emitent_inn"].fillna("").ne("")
+            candidates["ticker_exact"] = candidates["secid"].fillna("").eq(
+                normalize_ticker(company_row.get("ticker", ""))
+            ) & candidates["secid"].fillna("").ne("")
+            candidates["isin_exact"] = candidates["isin"].fillna("").eq(
+                normalize_isin(company_row.get("isin", ""))
+            ) & candidates["isin"].fillna("").ne("")
             candidates["bond_flag"] = candidates["group"].map(normalize_text).str.contains("bond", na=False) | candidates[
                 "type"
             ].map(normalize_text).str.contains("bond", na=False)
@@ -379,9 +391,23 @@ def load_moex_data(
             candidates["selected_flag"] = candidates["eligible_universe"] & (
                 (candidates["match_score"] >= 150)
                 | (
-                    (candidates["emitent_inn"].fillna("") == normalize_identifier(company_inn, length=10))
-                    & candidates["emitent_inn"].fillna("").ne("")
+                    candidates["emitent_inn_exact"]
                 )
+            )
+            candidates["exact_identifier_match"] = (
+                candidates["emitent_inn_exact"] | candidates["ticker_exact"] | candidates["isin_exact"]
+            )
+            candidates["history_candidate_flag"] = candidates["eligible_universe"] & (
+                candidates["selected_flag"]
+                | candidates["exact_identifier_match"]
+                | candidates["match_score"].ge(120)
+            )
+            candidates["source"] = "moex"
+            candidates["source_instrument_id"] = candidates["secid"]
+            candidates["instrument_kind_source"] = np.where(
+                candidates["bond_flag"],
+                "bond",
+                np.where(candidates["share_flag"], "share", ""),
             )
             candidates["sample_flag"] = company_row.get("sample_flag", "")
             candidates["sample_membership"] = company_row.get("sample_membership", "")
@@ -390,6 +416,22 @@ def load_moex_data(
             selected = candidates.loc[candidates["selected_flag"]].copy()
             selected_bonds = selected.loc[selected["bond_flag"]].copy()
             selected_shares = selected.loc[selected["share_flag"] & ~selected["bond_flag"]].copy()
+            history_candidate_bonds = candidates.loc[
+                candidates["history_candidate_flag"] & candidates["bond_flag"]
+            ].copy()
+            history_candidate_shares = candidates.loc[
+                candidates["history_candidate_flag"] & candidates["share_flag"] & ~candidates["bond_flag"]
+            ].copy()
+
+            bond_detail_targets = (
+                history_candidate_bonds if bond_detail_scope == "history_candidates" else selected_bonds
+            )
+            bond_history_targets = (
+                history_candidate_bonds if bond_history_scope == "history_candidates" else selected_bonds
+            )
+            share_history_targets = (
+                history_candidate_shares if share_history_scope == "history_candidates" else selected_shares
+            )
 
             if selected.empty:
                 top_row = candidates.sort_values("match_score", ascending=False, kind="stable").head(1)
@@ -422,7 +464,7 @@ def load_moex_data(
                     )
                 )
 
-            for _, bond_row in selected_bonds.iterrows():
+            for _, bond_row in bond_detail_targets.drop_duplicates(subset=["secid"], keep="first").iterrows():
                 secid = bond_row["secid"]
                 try:
                     bond_detail_df, boards_df = fetch_bond_detail(session, secid=secid)
@@ -443,7 +485,11 @@ def load_moex_data(
                                 source_col = meta_column.replace("company_", "")
                                 bond_detail_df[meta_column] = bond_row.get(meta_column, company_row.get(source_col, ""))
                         bond_detail_rows.append(bond_detail_df)
-                    if load_history and history_to:
+                    if (
+                        load_history
+                        and history_to
+                        and secid in set(bond_history_targets["secid"].astype(str))
+                    ):
                         history_df = fetch_bond_history(
                             session,
                             secid=secid,
@@ -484,7 +530,7 @@ def load_moex_data(
                 share_from = share_history_from or history_from
                 share_to = share_history_to or history_to
                 if share_to:
-                    unique_shares = selected_shares.drop_duplicates(subset=["secid"], keep="first")
+                    unique_shares = share_history_targets.drop_duplicates(subset=["secid"], keep="first")
                     for _, share_row in unique_shares.iterrows():
                         secid = share_row["secid"]
                         try:

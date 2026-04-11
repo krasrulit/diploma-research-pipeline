@@ -9,6 +9,7 @@
 - `additional_public_data_manual_review_validated.xlsx` — результат внешней ручной проверки, который не генерируется основным pipeline.
 - `additional_public_data_validated.xlsx` — workbook после применения ручной проверки к MOEX / T-Invest слоям.
 - `public_market_data_full.xlsx` — полный workbook по публичным источникам без СПАРК-отчетностей.
+- `public_securities_all_companies.xlsx` — единый security-universe workbook по акциям и облигациям для нефтегаза и металлургии.
 - `spark_combined_report.xlsx` — итоговый workbook по DOCX-отчетам СПАРК.
 - `spark_combined_report_2014q3_2025q4.xlsx` — вариант СПАРК workbook с квартальной сеткой `2014Q3–2025Q4` по всем компаниям из входной папки.
 - `spark_neftegaz_report_2014q3_2025q4.xlsx` — нефтегазовый SPARK workbook.
@@ -32,6 +33,8 @@
 - `download_log.csv` — лог скачивания и ошибок.
 
 Если какого-то файла нет, это обычно значит, что соответствующий источник не запускался или был отключен.
+
+Для глубокого анализа рынка бумаг удобнее открывать `public_securities_all_companies.xlsx`: там лежат `security_master_all`, `security_history_coverage`, `security_source_resolution`, `security_manual_review` и `company_security_summary`. Если long history sheets не влезают в Excel, соответствующие CSV sidecars сохраняются в подпапке `data_processed/public_securities_all/`.
 
 ## Как пользоваться validated workbook
 

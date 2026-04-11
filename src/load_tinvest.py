@@ -30,10 +30,12 @@ TINVEST_TOKEN_ENV = "TINVEST_TOKEN"
 TINVEST_SSL_VERIFY_ENV = "TINVEST_SSL_VERIFY"
 TINVEST_CA_BUNDLE_ENV = "TINVEST_CA_BUNDLE"
 DEFAULT_TINVEST_API_URL = "https://invest-public-api.tbank.ru/rest/tinkoff.public.invest.api.contract.v1.InstrumentsService"
+DEFAULT_TINVEST_MARKETDATA_URL = "https://invest-public-api.tbank.ru/rest/tinkoff.public.invest.api.contract.v1.MarketDataService"
 
 TINVEST_SHARES_URL = DEFAULT_TINVEST_API_URL + "/Shares"
 TINVEST_BONDS_URL = DEFAULT_TINVEST_API_URL + "/Bonds"
 TINVEST_BOND_COUPONS_URL = DEFAULT_TINVEST_API_URL + "/GetBondCoupons"
+TINVEST_GET_CANDLES_URL = DEFAULT_TINVEST_MARKETDATA_URL + "/GetCandles"
 
 
 def get_tinvest_token() -> str:
@@ -139,6 +141,8 @@ def normalize_instrument_frame(
         row["figi"] = clean_text(row.get("figi", ""))
         row["uid"] = clean_text(row.get("uid", ""))
         row["position_uid"] = clean_text(row.get("position_uid", ""))
+        row["source_instrument_id"] = clean_text(row.get("uid", "")) or clean_text(row.get("figi", ""))
+        row["source_instrument_id_type"] = "uid" if clean_text(row.get("uid", "")) else "figi"
         row["name"] = clean_text(row.get("name", ""))
         row["class_code"] = clean_text(row.get("class_code", ""))
         row["exchange"] = clean_text(row.get("exchange", ""))
@@ -330,6 +334,12 @@ def match_tinvest_instruments(
             candidate_row["match_confidence"] = confidence_from_match(score, overlap, reasons)
             candidate_row["selected_flag"] = is_selected_candidate(score, overlap, reasons)
             candidate_row["exact_identifier_match"] = exact_id
+            candidate_row["history_candidate_flag"] = (
+                candidate_row["selected_flag"]
+                or candidate_row["exact_identifier_match"]
+                or candidate_row["match_confidence"] in {"high", "medium"}
+            )
+            candidate_row["source"] = "tinvest"
             company_candidates.append(candidate_row)
 
         company_candidates = sorted(
@@ -404,6 +414,69 @@ def to_utc_timestamp(value: str, hour: int) -> str:
     return ts.isoformat().replace("+00:00", "Z")
 
 
+def history_chunks(
+    history_from: str,
+    history_to: str,
+    max_days: int = 365,
+) -> list[tuple[str, str]]:
+    start = pd.Timestamp(history_from).normalize()
+    end = pd.Timestamp(history_to).normalize()
+    if start > end:
+        return []
+
+    chunks: list[tuple[str, str]] = []
+    cursor = start
+    while cursor <= end:
+        chunk_end = min(cursor + pd.Timedelta(days=max_days - 1), end)
+        chunks.append((cursor.date().isoformat(), chunk_end.date().isoformat()))
+        cursor = chunk_end + pd.Timedelta(days=1)
+    return chunks
+
+
+def fetch_tinvest_candles(
+    session: requests.Session,
+    token: str,
+    instrument_id: str,
+    history_from: str,
+    history_to: str,
+    interval: str = "CANDLE_INTERVAL_DAY",
+) -> pd.DataFrame:
+    frames: list[pd.DataFrame] = []
+    for chunk_from, chunk_to in history_chunks(history_from, history_to):
+        payload = request_json_post(
+            session,
+            TINVEST_GET_CANDLES_URL,
+            json_body={
+                "instrumentId": instrument_id,
+                "from": to_utc_timestamp(chunk_from, hour=0),
+                "to": to_utc_timestamp(chunk_to, hour=23),
+                "interval": interval,
+            },
+            headers=build_auth_headers(token),
+        )
+        candles = payload.get("candles", [])
+        if not isinstance(candles, list) or not candles:
+            continue
+
+        rows = []
+        for candle in candles:
+            row = flatten_tinvest_record(candle)
+            row["source_instrument_id"] = instrument_id
+            row["interval"] = interval
+            rows.append(row)
+        frames.append(pd.DataFrame(rows))
+        time.sleep(0.05)
+
+    if not frames:
+        return pd.DataFrame()
+
+    frame = pd.concat(frames, ignore_index=True, sort=False)
+    dedupe_subset = [column for column in ["time", "source_instrument_id", "interval"] if column in frame.columns]
+    if dedupe_subset:
+        frame = frame.drop_duplicates(subset=dedupe_subset, keep="last").reset_index(drop=True)
+    return frame
+
+
 def fetch_bond_coupons(
     session: requests.Session,
     token: str,
@@ -440,6 +513,10 @@ def load_tinvest_optional(
     load_coupons: bool = False,
     coupon_from: str = "2010-01-01",
     coupon_to: str = "2035-12-31",
+    load_history: bool = False,
+    history_from: str = "2014-01-01",
+    history_to: str | None = None,
+    history_interval: str = "CANDLE_INTERVAL_DAY",
 ) -> dict[str, pd.DataFrame]:
     output_dir.mkdir(parents=True, exist_ok=True)
     tinvest_session, ssl_verify_mode = build_tinvest_session(session)
@@ -460,6 +537,7 @@ def load_tinvest_optional(
             "tinvest_instruments": pd.DataFrame(),
             "tinvest_bonds": pd.DataFrame(),
             "tinvest_bond_coupons": pd.DataFrame(),
+            "tinvest_history": pd.DataFrame(),
             "mapping_log": pd.DataFrame(),
             "download_log": log_df,
         }
@@ -520,6 +598,9 @@ def load_tinvest_optional(
 
     selected_bonds = instruments_df.loc[
         instruments_df["selected_flag"].fillna(False) & instruments_df["instrument_kind_source"].eq("bond")
+    ].copy() if not instruments_df.empty else pd.DataFrame()
+    history_candidates = instruments_df.loc[
+        instruments_df["history_candidate_flag"].fillna(False)
     ].copy() if not instruments_df.empty else pd.DataFrame()
 
     if not instruments_df.empty:
@@ -582,11 +663,85 @@ def load_tinvest_optional(
     if load_coupons and not coupons_df.empty:
         save_dataframe_csv(coupons_df, output_dir / "tinvest_bond_coupons.csv")
 
+    history_frames = []
+    history_to = history_to or pd.Timestamp.utcnow().date().isoformat()
+    if load_history and not history_candidates.empty:
+        unique_history_candidates = (
+            history_candidates.sort_values(
+                ["company_name", "match_score", "selected_flag"],
+                ascending=[True, False, False],
+                kind="stable",
+            )
+            .drop_duplicates(subset=["source_instrument_id"], keep="first")
+        )
+
+        for _, instrument_row in unique_history_candidates.iterrows():
+            instrument_id = clean_text(instrument_row.get("source_instrument_id", ""))
+            if not instrument_id:
+                continue
+            try:
+                history_df = fetch_tinvest_candles(
+                    session=tinvest_session,
+                    token=token,
+                    instrument_id=instrument_id,
+                    history_from=history_from,
+                    history_to=history_to,
+                    interval=history_interval,
+                )
+                if not history_df.empty:
+                    history_df["company_name"] = clean_text(instrument_row.get("company_name", ""))
+                    history_df["company_inn"] = clean_text(instrument_row.get("company_inn", ""))
+                    history_df["sample_flag"] = clean_text(instrument_row.get("sample_flag", ""))
+                    history_df["ticker"] = clean_text(instrument_row.get("ticker", ""))
+                    history_df["isin"] = clean_text(instrument_row.get("isin", ""))
+                    history_df["figi"] = clean_text(instrument_row.get("figi", ""))
+                    history_df["uid"] = clean_text(instrument_row.get("uid", ""))
+                    history_df["position_uid"] = clean_text(instrument_row.get("position_uid", ""))
+                    history_df["instrument_name"] = clean_text(instrument_row.get("name", ""))
+                    history_df["instrument_kind_source"] = clean_text(instrument_row.get("instrument_kind_source", ""))
+                    history_df["match_score"] = instrument_row.get("match_score")
+                    history_df["match_confidence"] = clean_text(instrument_row.get("match_confidence", ""))
+                    history_df["selected_flag"] = bool(instrument_row.get("selected_flag", False))
+                    history_frames.append(history_df)
+                download_rows.append(
+                    make_log_entry(
+                        source="tinvest_history",
+                        status="INFO",
+                        message="T-Invest candles loaded",
+                        instrument_id=instrument_id,
+                        ticker=clean_text(instrument_row.get("ticker", "")),
+                        isin=clean_text(instrument_row.get("isin", "")),
+                        rows=len(history_df),
+                        endpoint=TINVEST_GET_CANDLES_URL,
+                        ssl_verify=ssl_verify_mode,
+                    )
+                )
+            except Exception as exc:
+                download_rows.append(
+                    make_log_entry(
+                        source="tinvest_history",
+                        status="ERROR",
+                        message="Failed to load T-Invest candles",
+                        instrument_id=instrument_id,
+                        ticker=clean_text(instrument_row.get("ticker", "")),
+                        isin=clean_text(instrument_row.get("isin", "")),
+                        endpoint=TINVEST_GET_CANDLES_URL,
+                        ssl_verify=ssl_verify_mode,
+                        error=str(exc),
+                    )
+                )
+            time.sleep(0.05)
+
+    history_df = pd.concat(history_frames, ignore_index=True, sort=False) if history_frames else pd.DataFrame()
+    if load_history and not history_df.empty:
+        save_dataframe_csv(history_df, output_dir / "tinvest_history.csv")
+
     download_log_df = pd.DataFrame(download_rows)
     return {
         "tinvest_instruments": instruments_df,
         "tinvest_bonds": selected_bonds,
         "tinvest_bond_coupons": coupons_df,
+        "tinvest_history": history_df,
         "mapping_log": mapping_df,
         "download_log": download_log_df,
     }
