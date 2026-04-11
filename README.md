@@ -117,8 +117,10 @@ PYTHONPATH=vendor python3 main_public_market.py \
 - `security_master_all` — все релевантные share/bond инструменты из MOEX и T-Invest;
 - `security_history_coverage` — покрытие истории по каждому инструменту и источнику;
 - `security_source_resolution` — какой источник брать как основной по каждой бумаге;
+- `security_resolution_clean` — очищенный resolution-слой с флагами `usable_history` и `reliable_mapping`;
 - `security_manual_review` — конфликтные тикеры и источники, которые лучше сверить руками;
-- `company_security_summary` — компактная сводка по компаниям.
+- `company_security_summary` — компактная сводка по компаниям;
+- `company_market_access_clean` — чистый company-level слой, который уже удобно тянуть в исследовательскую панель.
 
 Команда:
 
@@ -234,8 +236,10 @@ PYTHONPATH=vendor python3 main_model_ready.py \
 - `security_master_all` — единый справочник акций и облигаций, найденных в MOEX и T-Invest по всем компаниям.
 - `security_history_coverage` — количество дат, span истории, заполненность `close/volume/value`, recent-data flag и общий `coverage_score` по каждой бумаге и источнику.
 - `security_source_resolution` — выбор основного источника по каждой бумаге с учетом coverage; здесь же лежит `manual_review_needed_flag`.
+- `security_resolution_clean` — аналитически очищенный слой по бумагам: `usable_history_flag`, `reliable_mapping_flag`, `market_relevance_bucket`.
 - `security_manual_review` — кейсы, где один тикер ведет к нескольким реальным инструментам или у двух источников почти одинаковое покрытие.
 - `company_security_summary` — сводка по всем 174 компаниям: сколько бумаг найдено, сколько из них с историей, сколько групп требуют ручной сверки.
+- `company_market_access_clean` — итоговый company-level market access слой: есть ли вообще публичные бумаги, сколько usable/reliable акций и облигаций, какой источник доминирует, где нужен manual review.
 - `moex_instruments_all`, `moex_bonds_all`, `tinvest_instruments_all`, `tinvest_bonds_selected`, `tinvest_bond_coupons` — исходные рыночные слои до финального resolution.
 - `security_history_moex`, `security_history_tinvest`, `security_history_all` — long-form history sheets, если они помещаются в Excel-лимит. В любом случае эти же таблицы сохраняются как CSV sidecars в `data_processed/public_securities_all/`.
 - `mapping_log`, `download_log`, `sheet_inventory` — контроль загрузки, ошибок API и того, какие таблицы были реально записаны в workbook.

@@ -35,7 +35,7 @@
   Собирает единый `public_market_data_full.xlsx` без СПАРК-отчетностей: shortlist, validated mapping, MOEX, T-Invest, CBR, commodities и compact flags по компаниям.
 
 - `build_public_securities_workbook.py`
-  Собирает единый security-universe workbook по всем компаниям: нормализует MOEX + T-Invest инструменты, считает history coverage, строит `security_source_resolution`, выделяет `security_manual_review` и сохраняет sidecar CSV по большим history-таблицам.
+  Собирает единый security-universe workbook по всем компаниям: нормализует MOEX + T-Invest инструменты, считает history coverage, строит `security_source_resolution`, отдельный `security_resolution_clean`, company-level `company_market_access_clean`, выделяет `security_manual_review` и сохраняет sidecar CSV по большим history-таблицам.
 
 - `build_analysis_panel.py`
   Собирает объединенный SPARK-workbook по нефтегазу и металлургии, добавляет `sector` и `sample_flag`, подтягивает квартальные макро/commodity признаки и формирует итоговый `analysis_panel.xlsx`.

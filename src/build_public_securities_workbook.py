@@ -110,6 +110,19 @@ def coalesce_meta_columns(frame: pd.DataFrame, columns: list[str]) -> pd.DataFra
     return out
 
 
+def override_with_meta_columns(frame: pd.DataFrame, columns: list[str]) -> pd.DataFrame:
+    out = frame.copy()
+    for column in columns:
+        meta_column = f"{column}_meta"
+        if meta_column not in out.columns:
+            continue
+        out[column] = out[meta_column]
+    drop_cols = [f"{column}_meta" for column in columns if f"{column}_meta" in out.columns]
+    if drop_cols:
+        out = out.drop(columns=drop_cols)
+    return out
+
+
 def read_csv_if_exists(path: Path) -> pd.DataFrame:
     if not path.exists():
         return pd.DataFrame()
@@ -376,11 +389,14 @@ def prepare_tinvest_security_master(
             "inn": "company_inn",
         }
     )
+    if "sector" in frame.columns:
+        frame["source_market_sector"] = frame["sector"].map(clean_text)
     frame = frame.merge(company_meta, on="company_inn", how="left", suffixes=("", "_meta"))
-    frame = coalesce_meta_columns(
+    frame = override_with_meta_columns(
         frame,
         ["sector", "sample_flag", "sample_membership", "sample_main_flag", "sample_extended_flag", "company_id"],
     )
+    frame = coalesce_meta_columns(frame, ["company_name_shortlist"])
     frame["company_id"] = frame["company_id"].fillna(
         frame.apply(
             lambda row: f"{clean_text(row.get('sector', 'unknown'))}:{clean_text(row.get('company_inn', ''))}"
@@ -431,6 +447,7 @@ def prepare_tinvest_security_master(
         "ticker_collision_key",
         "boardid",
         "currency",
+        "source_market_sector",
         "trading_status",
         "maturity_date",
         "nominal",
@@ -869,6 +886,9 @@ def build_security_source_resolution(coverage: pd.DataFrame) -> pd.DataFrame:
                 "best_history_start": best.get("history_start"),
                 "best_history_end": best.get("history_end"),
                 "best_match_score": float(best.get("match_score", np.nan)) if pd.notna(best.get("match_score")) else np.nan,
+                "best_match_confidence": clean_text(best.get("match_confidence", "")),
+                "best_selected_flag": bool_value(best.get("selected_flag", False)),
+                "best_exact_identifier_match": bool_value(best.get("exact_identifier_match", False)),
                 "alt_source": clean_text(second.get("source", "")) if second is not None else "",
                 "alt_source_instrument_id": clean_text(second.get("source_instrument_id", "")) if second is not None else "",
                 "alt_coverage_score": second_score,
@@ -1039,6 +1059,239 @@ def build_company_security_summary(
     return base.sort_values(["sector", "sample_flag", "company_name"], kind="stable").reset_index(drop=True)
 
 
+def build_security_source_resolution_clean(
+    resolution: pd.DataFrame,
+) -> pd.DataFrame:
+    if resolution.empty:
+        return pd.DataFrame()
+
+    clean = resolution.copy()
+    clean["history_available_flag"] = clean["history_available_flag"].fillna(False)
+    clean["manual_review_needed_flag"] = clean["manual_review_needed_flag"].fillna(False)
+    clean["best_selected_flag"] = clean.get("best_selected_flag", False)
+    clean["best_exact_identifier_match"] = clean.get("best_exact_identifier_match", False)
+    clean["usable_history_flag"] = clean["history_available_flag"] & ~clean["manual_review_needed_flag"]
+    clean["reliable_mapping_flag"] = clean["usable_history_flag"] & (
+        clean["best_selected_flag"].fillna(False) | clean["best_exact_identifier_match"].fillna(False)
+    )
+    clean["market_relevance_bucket"] = np.select(
+        [
+            clean["reliable_mapping_flag"],
+            clean["usable_history_flag"],
+            clean["history_available_flag"],
+            clean["manual_review_needed_flag"],
+        ],
+        [
+            "reliable_history",
+            "usable_history",
+            "history_manual_review",
+            "manual_review_no_history",
+        ],
+        default="no_history",
+    )
+    keep_cols = [
+        "company_id",
+        "company_name",
+        "company_inn",
+        "sector",
+        "sample_flag",
+        "instrument_type",
+        "ticker",
+        "isin",
+        "instrument_name",
+        "canonical_security_key",
+        "best_source",
+        "best_source_instrument_id",
+        "best_coverage_score",
+        "best_n_trade_dates",
+        "best_history_start",
+        "best_history_end",
+        "best_match_score",
+        "best_match_confidence",
+        "best_selected_flag",
+        "best_exact_identifier_match",
+        "sources_available",
+        "source_rows_available",
+        "manual_review_needed_flag",
+        "resolution_reason",
+        "history_available_flag",
+        "usable_history_flag",
+        "reliable_mapping_flag",
+        "market_relevance_bucket",
+    ]
+    keep_cols = [column for column in keep_cols if column in clean.columns]
+    return clean[keep_cols].sort_values(
+        ["sector", "sample_flag", "company_name", "instrument_type", "usable_history_flag", "best_n_trade_dates"],
+        ascending=[True, True, True, True, False, False],
+        kind="stable",
+    ).reset_index(drop=True)
+
+
+def build_company_market_access_clean(
+    companies_master: pd.DataFrame,
+    resolution_clean: pd.DataFrame,
+) -> pd.DataFrame:
+    base = company_meta_lookup(companies_master).rename(
+        columns={"inn": "company_inn", "ticker": "company_ticker", "isin": "company_isin"}
+    )
+    if base.empty:
+        return pd.DataFrame()
+
+    if resolution_clean.empty:
+        out = base.copy()
+        fill_zero_cols = [
+            "n_security_groups_total",
+            "n_groups_with_history",
+            "n_groups_usable_history",
+            "n_groups_reliable",
+            "n_share_groups_usable",
+            "n_bond_groups_usable",
+            "n_share_groups_reliable",
+            "n_bond_groups_reliable",
+            "n_groups_manual_review",
+            "n_groups_best_source_moex",
+            "n_groups_best_source_tinvest",
+            "max_trade_dates_any",
+            "max_trade_dates_usable",
+        ]
+        for column in fill_zero_cols:
+            out[column] = 0
+        out["market_history_start_min"] = pd.NaT
+        out["market_history_end_max"] = pd.NaT
+    else:
+        work = resolution_clean.copy()
+        aggregated = (
+            work.groupby(["company_id", "company_name", "company_inn", "sector", "sample_flag"], dropna=False)
+            .agg(
+                n_security_groups_total=("canonical_security_key", "size"),
+                n_groups_with_history=("history_available_flag", lambda values: int(pd.Series(values).fillna(False).sum())),
+                n_groups_usable_history=("usable_history_flag", lambda values: int(pd.Series(values).fillna(False).sum())),
+                n_groups_reliable=("reliable_mapping_flag", lambda values: int(pd.Series(values).fillna(False).sum())),
+                n_share_groups_usable=("instrument_type", lambda values: int(((work.loc[values.index, "instrument_type"] == "share") & work.loc[values.index, "usable_history_flag"].fillna(False)).sum())),
+                n_bond_groups_usable=("instrument_type", lambda values: int(((work.loc[values.index, "instrument_type"] == "bond") & work.loc[values.index, "usable_history_flag"].fillna(False)).sum())),
+                n_share_groups_reliable=("instrument_type", lambda values: int(((work.loc[values.index, "instrument_type"] == "share") & work.loc[values.index, "reliable_mapping_flag"].fillna(False)).sum())),
+                n_bond_groups_reliable=("instrument_type", lambda values: int(((work.loc[values.index, "instrument_type"] == "bond") & work.loc[values.index, "reliable_mapping_flag"].fillna(False)).sum())),
+                n_groups_manual_review=("manual_review_needed_flag", lambda values: int(pd.Series(values).fillna(False).sum())),
+                n_groups_best_source_moex=("best_source", lambda values: int(pd.Series(values).eq("moex").sum())),
+                n_groups_best_source_tinvest=("best_source", lambda values: int(pd.Series(values).eq("tinvest").sum())),
+                max_trade_dates_any=("best_n_trade_dates", "max"),
+                max_trade_dates_usable=("best_n_trade_dates", lambda values: int(pd.Series(values)[work.loc[values.index, "usable_history_flag"].fillna(False)].max()) if work.loc[values.index, "usable_history_flag"].fillna(False).any() else 0),
+                market_history_start_min=("best_history_start", "min"),
+                market_history_end_max=("best_history_end", "max"),
+            )
+            .reset_index()
+        )
+        out = base.merge(
+            aggregated,
+            on=["company_id", "company_name", "company_inn", "sector", "sample_flag"],
+            how="left",
+        )
+
+    int_columns = [
+        "n_security_groups_total",
+        "n_groups_with_history",
+        "n_groups_usable_history",
+        "n_groups_reliable",
+        "n_share_groups_usable",
+        "n_bond_groups_usable",
+        "n_share_groups_reliable",
+        "n_bond_groups_reliable",
+        "n_groups_manual_review",
+        "n_groups_best_source_moex",
+        "n_groups_best_source_tinvest",
+        "max_trade_dates_any",
+        "max_trade_dates_usable",
+    ]
+    for column in int_columns:
+        out[column] = pd.to_numeric(out.get(column), errors="coerce").fillna(0).astype(int)
+
+    out["market_has_any_candidate_flag"] = out["n_security_groups_total"].gt(0)
+    out["market_has_history_flag"] = out["n_groups_with_history"].gt(0)
+    out["market_has_usable_history_flag"] = out["n_groups_usable_history"].gt(0)
+    out["market_has_reliable_mapping_flag"] = out["n_groups_reliable"].gt(0)
+    out["market_has_usable_share_flag"] = out["n_share_groups_usable"].gt(0)
+    out["market_has_usable_bond_flag"] = out["n_bond_groups_usable"].gt(0)
+    out["market_has_reliable_share_flag"] = out["n_share_groups_reliable"].gt(0)
+    out["market_has_reliable_bond_flag"] = out["n_bond_groups_reliable"].gt(0)
+    out["market_needs_manual_review_flag"] = out["n_groups_manual_review"].gt(0)
+    out["market_access_status"] = np.select(
+        [
+            out["market_has_reliable_mapping_flag"],
+            out["market_has_usable_history_flag"],
+            out["market_has_history_flag"],
+            out["market_has_any_candidate_flag"],
+        ],
+        [
+            "reliable_history",
+            "usable_history",
+            "history_manual_review",
+            "candidates_only",
+        ],
+        default="no_public_securities_found",
+    )
+    out["market_primary_source"] = np.select(
+        [
+            out["n_groups_best_source_moex"].gt(out["n_groups_best_source_tinvest"]),
+            out["n_groups_best_source_tinvest"].gt(out["n_groups_best_source_moex"]),
+            out["n_groups_best_source_moex"].gt(0) & out["n_groups_best_source_tinvest"].gt(0),
+        ],
+        [
+            "moex",
+            "tinvest",
+            "mixed",
+        ],
+        default="none",
+    )
+    order_cols = [
+        "company_id",
+        "company_name",
+        "company_name_short",
+        "company_name_full",
+        "company_name_en",
+        "company_name_core",
+        "company_inn",
+        "ogrn",
+        "company_ticker",
+        "company_isin",
+        "spark_id",
+        "industry",
+        "sector",
+        "sample_flag",
+        "sample_membership",
+        "selection_result",
+        "sample_main_flag",
+        "sample_extended_flag",
+        "market_access_status",
+        "market_primary_source",
+        "market_has_any_candidate_flag",
+        "market_has_history_flag",
+        "market_has_usable_history_flag",
+        "market_has_reliable_mapping_flag",
+        "market_has_usable_share_flag",
+        "market_has_usable_bond_flag",
+        "market_has_reliable_share_flag",
+        "market_has_reliable_bond_flag",
+        "market_needs_manual_review_flag",
+        "n_security_groups_total",
+        "n_groups_with_history",
+        "n_groups_usable_history",
+        "n_groups_reliable",
+        "n_share_groups_usable",
+        "n_bond_groups_usable",
+        "n_share_groups_reliable",
+        "n_bond_groups_reliable",
+        "n_groups_manual_review",
+        "n_groups_best_source_moex",
+        "n_groups_best_source_tinvest",
+        "max_trade_dates_any",
+        "max_trade_dates_usable",
+        "market_history_start_min",
+        "market_history_end_max",
+    ]
+    order_cols = [column for column in order_cols if column in out.columns]
+    return out[order_cols].sort_values(["sector", "sample_flag", "company_name"], kind="stable").reset_index(drop=True)
+
+
 def build_sheet_inventory(outputs: dict[str, pd.DataFrame], workbook_sheets: list[str]) -> pd.DataFrame:
     rows = []
     for sheet_name, frame in outputs.items():
@@ -1104,6 +1357,7 @@ def build_public_securities_outputs(
 
     security_history_coverage = build_security_history_coverage(security_master_all, security_history_all)
     security_source_resolution = build_security_source_resolution(security_history_coverage)
+    security_source_resolution_clean = build_security_source_resolution_clean(security_source_resolution)
     security_manual_review = build_security_manual_review(security_history_coverage, security_source_resolution)
     company_security_summary = build_company_security_summary(
         companies_master,
@@ -1111,14 +1365,20 @@ def build_public_securities_outputs(
         security_history_coverage,
         security_source_resolution,
     )
+    company_market_access_clean = build_company_market_access_clean(
+        companies_master,
+        security_source_resolution_clean,
+    )
 
     outputs = {
         "companies_master": companies_master,
         "security_master_all": security_master_all,
         "security_history_coverage": security_history_coverage,
         "security_source_resolution": security_source_resolution,
+        "security_resolution_clean": security_source_resolution_clean,
         "security_manual_review": security_manual_review,
         "company_security_summary": company_security_summary,
+        "company_market_access_clean": company_market_access_clean,
         "moex_instruments_all": moex_instruments,
         "moex_bonds_all": moex_bonds,
         "tinvest_instruments_all": tinvest_instruments,

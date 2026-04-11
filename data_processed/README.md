@@ -34,7 +34,7 @@
 
 Если какого-то файла нет, это обычно значит, что соответствующий источник не запускался или был отключен.
 
-Для глубокого анализа рынка бумаг удобнее открывать `public_securities_all_companies.xlsx`: там лежат `security_master_all`, `security_history_coverage`, `security_source_resolution`, `security_manual_review` и `company_security_summary`. Если long history sheets не влезают в Excel, соответствующие CSV sidecars сохраняются в подпапке `data_processed/public_securities_all/`.
+Для глубокого анализа рынка бумаг удобнее открывать `public_securities_all_companies.xlsx`: там лежат `security_master_all`, `security_history_coverage`, `security_source_resolution`, `security_resolution_clean`, `security_manual_review`, `company_security_summary` и `company_market_access_clean`. Если long history sheets не влезают в Excel, соответствующие CSV sidecars сохраняются в подпапке `data_processed/public_securities_all/`.
 
 ## Как пользоваться validated workbook
 
