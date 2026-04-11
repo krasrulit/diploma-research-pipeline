@@ -407,13 +407,22 @@ def is_header_row(row: list[str]) -> bool:
 
     norm_cells = [normalize_text(cell) for cell in row]
     joined = " | ".join(norm_cells)
-    has_code = any("код" in cell for cell in norm_cells[:2])
-    has_value_columns = any(cell for cell in norm_cells[2:])
-    has_metric_axis = (
-        "наименование показателя" in joined
-        or norm_cells[0] in {"актив", "пассив"}
+    first_cell = norm_cells[0]
+    second_cell = norm_cells[1] if len(norm_cells) > 1 else ""
+    value_headers = [cell for cell in norm_cells[2:] if cell]
+    has_value_columns = bool(value_headers)
+    if not has_value_columns:
+        return False
+
+    has_code_axis = any("код" in cell for cell in norm_cells[:2])
+    has_metric_axis = "наименование показателя" in joined
+    is_code_less_metric_header = first_cell == "наименование показателя" and not second_cell
+    balance_header_hints = ("за отчетный период", "на отчетную дату", "на 31 декабря")
+    is_balance_value_header = first_cell in {"актив", "пассив"} and any(
+        any(hint in header for hint in balance_header_hints) for header in value_headers
     )
-    return has_code and has_value_columns and has_metric_axis
+
+    return (has_metric_axis and (has_code_axis or is_code_less_metric_header)) or is_balance_value_header
 
 
 def looks_like_data_table(rows: list[list[str]]) -> bool:

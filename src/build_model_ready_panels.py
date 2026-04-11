@@ -83,6 +83,14 @@ RATIO_COLUMNS = [
     "equity_to_assets",
     "net_margin",
     "ebit_margin",
+    "net_debt",
+    "net_debt_to_assets",
+    "cfo_to_assets",
+    "capex_to_assets",
+    "capex_to_cfo",
+    "interest_coverage",
+    "net_margin_winsor_1_99",
+    "ebit_margin_winsor_1_99",
     "log_assets",
     "log_revenue",
 ]
@@ -129,6 +137,29 @@ def commodity_columns(frame: pd.DataFrame) -> list[str]:
     return sorted([column for column in frame.columns if column.startswith("cmd_") and column.endswith("_avg_q")])
 
 
+def winsorize_series(series: pd.Series, lower_q: float = 0.01, upper_q: float = 0.99) -> pd.Series:
+    out = pd.to_numeric(series, errors="coerce")
+    valid = out.dropna()
+    if valid.empty:
+        return out
+    lower = valid.quantile(lower_q)
+    upper = valid.quantile(upper_q)
+    return out.clip(lower=lower, upper=upper)
+
+
+def add_engineered_columns(panel: pd.DataFrame) -> pd.DataFrame:
+    out = panel.copy()
+    out["net_debt"] = out["total_debt"] - out["cash"]
+    out["net_debt_to_assets"] = out["net_debt"] / out["assets_total"]
+    out["cfo_to_assets"] = out["cfo"] / out["assets_total"]
+    out["capex_to_assets"] = out["capex"] / out["assets_total"]
+    out["capex_to_cfo"] = out["capex"] / out["cfo"]
+    out["interest_coverage"] = out["ebit"] / out["interest_expense"]
+    out["net_margin_winsor_1_99"] = winsorize_series(out["net_margin"])
+    out["ebit_margin_winsor_1_99"] = winsorize_series(out["ebit_margin"])
+    return out
+
+
 def select_model_columns(frame: pd.DataFrame) -> pd.DataFrame:
     columns = (
         BASE_IDENTIFIER_COLUMNS
@@ -145,6 +176,11 @@ def select_model_columns(frame: pd.DataFrame) -> pd.DataFrame:
 
 
 def build_summary(panel: pd.DataFrame, frequency: str) -> pd.DataFrame:
+    companies_with_data = (
+        panel.groupby(["sector", "company_id"], dropna=False)["reporting_observed_flag"]
+        .max()
+        .reset_index()
+    )
     rows = [
         {"frequency": frequency, "metric": "n_rows", "value": len(panel)},
         {"frequency": frequency, "metric": "n_unique_companies", "value": int(panel["company_id"].nunique())},
@@ -153,6 +189,22 @@ def build_summary(panel: pd.DataFrame, frequency: str) -> pd.DataFrame:
         {"frequency": frequency, "metric": "n_main_companies", "value": int(panel.loc[panel["sample_flag"].eq("main"), "company_id"].nunique())},
         {"frequency": frequency, "metric": "n_extended_companies", "value": int(panel.loc[panel["sample_flag"].eq("extended"), "company_id"].nunique())},
         {"frequency": frequency, "metric": "rows_with_reporting_data", "value": int(panel["reporting_observed_flag"].fillna(False).sum())},
+        {"frequency": frequency, "metric": "rows_with_reporting_data_share", "value": float(panel["reporting_observed_flag"].fillna(False).mean())},
+        {"frequency": frequency, "metric": "companies_with_reporting_data", "value": int(companies_with_data["reporting_observed_flag"].fillna(False).sum())},
+        {
+            "frequency": frequency,
+            "metric": "oil_gas_companies_with_reporting_data",
+            "value": int(
+                companies_with_data.loc[companies_with_data["sector"].eq("oil_gas"), "reporting_observed_flag"].fillna(False).sum()
+            ),
+        },
+        {
+            "frequency": frequency,
+            "metric": "metallurgy_companies_with_reporting_data",
+            "value": int(
+                companies_with_data.loc[companies_with_data["sector"].eq("metallurgy"), "reporting_observed_flag"].fillna(False).sum()
+            ),
+        },
         {"frequency": frequency, "metric": "rows_with_assets", "value": int(panel["assets_total"].notna().sum())},
         {"frequency": frequency, "metric": "rows_with_revenue", "value": int(panel["revenue"].notna().sum())},
     ]
@@ -210,6 +262,14 @@ def variable_description(column: str) -> str:
         "equity_to_assets": "Equity divided by total assets.",
         "net_margin": "Net income divided by revenue.",
         "ebit_margin": "EBIT divided by revenue.",
+        "net_debt": "Total debt minus cash.",
+        "net_debt_to_assets": "Net debt divided by total assets.",
+        "cfo_to_assets": "Cash flow from operations divided by total assets.",
+        "capex_to_assets": "Capital expenditures divided by total assets.",
+        "capex_to_cfo": "Capital expenditures divided by cash flow from operations.",
+        "interest_coverage": "EBIT divided by interest expense.",
+        "net_margin_winsor_1_99": "Net margin winsorized at the 1st and 99th percentiles within the panel frequency.",
+        "ebit_margin_winsor_1_99": "EBIT margin winsorized at the 1st and 99th percentiles within the panel frequency.",
         "log_assets": "Natural log of total assets.",
         "log_revenue": "Natural log of revenue.",
         "public_market_enriched_flag": "1 if public-market enrichment from the oil-gas pipeline is available.",
@@ -255,7 +315,7 @@ def build_model_ready_panels(
     annual_output: Path = DEFAULT_ANNUAL_OUTPUT,
 ) -> dict[str, pd.DataFrame]:
     panel = pd.read_excel(analysis_panel_workbook, sheet_name="analysis_panel_quarterly")
-    quarterly_panel = select_model_columns(panel).copy()
+    quarterly_panel = add_engineered_columns(select_model_columns(panel).copy())
     annual_panel = quarterly_panel.loc[quarterly_panel["period_type"].eq("Q4")].copy()
 
     quarterly_summary = build_summary(quarterly_panel, "quarterly")
