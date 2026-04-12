@@ -17,6 +17,8 @@ DEFAULT_METALLURGY_SHORTLIST = Path("/Users/grigorijkrasovickij/4 крус/Ди�
 DEFAULT_OIL_GAS_SPARK = PROJECT_ROOT / "data_processed" / "spark_neftegaz_report_2014q3_2025q4.xlsx"
 DEFAULT_METALLURGY_SPARK = PROJECT_ROOT / "data_processed" / "spark_metallurgy_report_2014q3_2025q4.xlsx"
 DEFAULT_PUBLIC_MARKET = PROJECT_ROOT / "data_processed" / "public_market_data_full.xlsx"
+DEFAULT_OWNERSHIP = PROJECT_ROOT / "data_processed" / "ownership_state_table.xlsx"
+DEFAULT_SECURITIES = PROJECT_ROOT / "data_processed" / "public_securities_all_companies_optimized_lite.xlsx"
 DEFAULT_SPARK_COMBINED = PROJECT_ROOT / "data_processed" / "spark_sector_combined_2014q3_2025q4.xlsx"
 DEFAULT_ANALYSIS_OUTPUT = PROJECT_ROOT / "data_processed" / "analysis_panel.xlsx"
 
@@ -315,6 +317,89 @@ def load_public_market_flags(public_market_workbook: Path) -> pd.DataFrame:
     return out
 
 
+def load_clean_market_access(securities_workbook: Path) -> pd.DataFrame:
+    access = pd.read_excel(securities_workbook, sheet_name="company_market_access_clean")
+    access = access.copy()
+    access["company_id"] = access["company_id"].astype(str).str.strip()
+    selected_columns = [
+        "company_id",
+        "market_access_status",
+        "market_primary_source",
+        "market_has_any_candidate_flag",
+        "market_has_history_flag",
+        "market_has_usable_history_flag",
+        "market_has_reliable_mapping_flag",
+        "market_has_usable_share_flag",
+        "market_has_usable_bond_flag",
+        "market_has_reliable_share_flag",
+        "market_has_reliable_bond_flag",
+        "market_needs_manual_review_flag",
+        "n_security_groups_total",
+        "n_groups_with_history",
+        "n_groups_usable_history",
+        "n_groups_reliable",
+        "n_share_groups_usable",
+        "n_bond_groups_usable",
+        "n_share_groups_reliable",
+        "n_bond_groups_reliable",
+        "n_groups_manual_review",
+        "n_groups_best_source_moex",
+        "n_groups_best_source_tinvest",
+        "max_trade_dates_any",
+        "max_trade_dates_usable",
+        "market_history_start_min",
+        "market_history_end_max",
+    ]
+    selected_columns = [column for column in selected_columns if column in access.columns]
+    out = access[selected_columns].copy()
+    for date_column in ["market_history_start_min", "market_history_end_max"]:
+        if date_column in out.columns:
+            out[date_column] = pd.to_datetime(out[date_column], errors="coerce")
+    return out
+
+
+def load_ownership_state(ownership_workbook: Path) -> pd.DataFrame:
+    ownership = pd.read_excel(ownership_workbook, sheet_name="ownership_state_table")
+    ownership = ownership.copy()
+    ownership["sector"] = ownership["sector"].astype(str).str.strip()
+    ownership["inn"] = ownership["inn"].map(lambda value: normalize_identifier(value, length=10))
+    ownership["company_id"] = ownership.apply(
+        lambda row: f"{row['sector']}:{row['inn']}" if str(row["inn"]).strip() else f"{row['sector']}:{row.get('company_name', '')}",
+        axis=1,
+    )
+    selected_columns = [
+        "company_id",
+        "report_found_flag",
+        "source_file",
+        "source_path",
+        "company_from_file",
+        "full_company_name_report",
+        "web_domain",
+        "head_company_name",
+        "n_subsidiaries",
+        "has_head_company_field_flag",
+        "has_subsidiaries_flag",
+        "is_subsidiary_flag",
+        "is_parent_flag",
+        "ownership_role",
+        "group_name_inferred",
+        "state_owned_flag",
+        "state_bucket",
+        "group_inference_source",
+        "group_inference_confidence",
+        "ownership_review_needed_flag",
+        "head_company_snippet",
+        "text_length",
+        "parse_status",
+    ]
+    selected_columns = [column for column in selected_columns if column in ownership.columns]
+    out = ownership[selected_columns].copy()
+    rename_map = {
+        column: f"ownership_{column}" for column in out.columns if column not in {"company_id"}
+    }
+    return out.rename(columns=rename_map)
+
+
 def with_min_count_sum(frame: pd.DataFrame, columns: list[str]) -> pd.Series:
     return frame[columns].sum(axis=1, min_count=1)
 
@@ -323,9 +408,13 @@ def build_analysis_panel_quarterly(
     spark_panel_quarterly: pd.DataFrame,
     companies_master: pd.DataFrame,
     public_market_workbook: Path,
+    ownership_workbook: Path,
+    securities_workbook: Path,
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
     macro_quarterly = build_macro_quarterly(public_market_workbook)
     public_market_flags = load_public_market_flags(public_market_workbook)
+    clean_market_access = load_clean_market_access(securities_workbook)
+    ownership_state = load_ownership_state(ownership_workbook)
     macro_for_merge = macro_quarterly.drop(
         columns=["report_year", "period_type", "quarter_num", "quarter_end_date"],
         errors="ignore",
@@ -347,7 +436,12 @@ def build_analysis_panel_quarterly(
         ["assets_total", "ppe", "cash", "equity", "debt_lt", "debt_st", "revenue", "interest_expense", "net_income", "ebit"]
     ].notna().sum(axis=1)
 
-    panel = panel.merge(macro_for_merge, on="quarter_label", how="left").merge(public_market_flags, on="inn", how="left")
+    panel = (
+        panel.merge(macro_for_merge, on="quarter_label", how="left")
+        .merge(public_market_flags, on="inn", how="left")
+        .merge(clean_market_access, on="company_id", how="left")
+        .merge(ownership_state, on="company_id", how="left")
+    )
     panel["public_market_enriched_flag"] = panel["public_market_enriched_flag"].fillna(False)
 
     panel["total_debt"] = with_min_count_sum(panel, ["debt_lt", "debt_st"])
@@ -383,6 +477,9 @@ def build_analysis_summary(
         {"metric": "analysis_panel_quarterly_rows", "value": len(analysis_panel_quarterly)},
         {"metric": "analysis_unique_company_ids", "value": int(analysis_panel_quarterly["company_id"].nunique())},
         {"metric": "analysis_rows_with_reporting_data", "value": int(analysis_panel_quarterly["reporting_observed_flag"].sum())},
+        {"metric": "analysis_rows_with_usdrub", "value": int(analysis_panel_quarterly["macro_usdrub_avg_q"].notna().sum())},
+        {"metric": "analysis_companies_with_ownership_state", "value": int(analysis_panel_quarterly.loc[analysis_panel_quarterly["ownership_state_bucket"].notna(), "company_id"].nunique())},
+        {"metric": "analysis_companies_with_clean_market_access", "value": int(analysis_panel_quarterly.loc[analysis_panel_quarterly["market_access_status"].notna(), "company_id"].nunique())},
     ]
     return pd.DataFrame(rows)
 
@@ -400,6 +497,8 @@ def build_analysis_outputs(
     oil_gas_spark: Path = DEFAULT_OIL_GAS_SPARK,
     metallurgy_spark: Path = DEFAULT_METALLURGY_SPARK,
     public_market_workbook: Path = DEFAULT_PUBLIC_MARKET,
+    ownership_workbook: Path = DEFAULT_OWNERSHIP,
+    securities_workbook: Path = DEFAULT_SECURITIES,
     spark_combined_output: Path = DEFAULT_SPARK_COMBINED,
     analysis_output: Path = DEFAULT_ANALYSIS_OUTPUT,
 ) -> dict[str, pd.DataFrame]:
@@ -410,6 +509,8 @@ def build_analysis_outputs(
         spark_panel_quarterly=spark_outputs["panel_quarterly"],
         companies_master=companies_master,
         public_market_workbook=public_market_workbook,
+        ownership_workbook=ownership_workbook,
+        securities_workbook=securities_workbook,
     )
     analysis_summary = build_analysis_summary(
         companies_master=companies_master,
@@ -435,6 +536,8 @@ def build_analysis_outputs(
         "analysis_summary": analysis_summary,
         "companies_master": companies_master,
         "analysis_panel_quarterly": analysis_panel_quarterly,
+        "ownership_state_table": load_ownership_state(ownership_workbook),
+        "company_market_access_clean": load_clean_market_access(securities_workbook),
         "spark_panel_quarterly": spark_outputs["panel_quarterly"],
         "spark_panel_core": spark_outputs["panel_core"],
         "spark_input_inventory": spark_outputs["input_inventory"],
@@ -458,6 +561,8 @@ def build_analysis_outputs(
         "macro_quarterly": macro_quarterly,
         "analysis_panel_quarterly": analysis_panel_quarterly,
         "analysis_summary": analysis_summary,
+        "ownership_state_table": load_ownership_state(ownership_workbook),
+        "company_market_access_clean": load_clean_market_access(securities_workbook),
         "shortlist_log": shortlist_log,
     }
 
@@ -469,6 +574,8 @@ def main() -> None:
     parser.add_argument("--oil-gas-spark", type=Path, default=DEFAULT_OIL_GAS_SPARK)
     parser.add_argument("--metallurgy-spark", type=Path, default=DEFAULT_METALLURGY_SPARK)
     parser.add_argument("--public-market", type=Path, default=DEFAULT_PUBLIC_MARKET)
+    parser.add_argument("--ownership", type=Path, default=DEFAULT_OWNERSHIP)
+    parser.add_argument("--securities", type=Path, default=DEFAULT_SECURITIES)
     parser.add_argument("--spark-output", type=Path, default=DEFAULT_SPARK_COMBINED)
     parser.add_argument("--analysis-output", type=Path, default=DEFAULT_ANALYSIS_OUTPUT)
     args = parser.parse_args()
@@ -479,6 +586,8 @@ def main() -> None:
         oil_gas_spark=args.oil_gas_spark,
         metallurgy_spark=args.metallurgy_spark,
         public_market_workbook=args.public_market,
+        ownership_workbook=args.ownership,
+        securities_workbook=args.securities,
         spark_combined_output=args.spark_output,
         analysis_output=args.analysis_output,
     )
