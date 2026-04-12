@@ -112,6 +112,52 @@ MARKET_FLAG_COLUMNS = [
     "market_has_tinvest_bonds",
 ]
 
+MARKET_ACCESS_COLUMNS = [
+    "market_access_status",
+    "market_primary_source",
+    "market_has_any_candidate_flag",
+    "market_has_history_flag",
+    "market_has_usable_history_flag",
+    "market_has_reliable_mapping_flag",
+    "market_has_usable_share_flag",
+    "market_has_usable_bond_flag",
+    "market_has_reliable_share_flag",
+    "market_has_reliable_bond_flag",
+    "market_needs_manual_review_flag",
+    "n_security_groups_total",
+    "n_groups_with_history",
+    "n_groups_usable_history",
+    "n_groups_reliable",
+    "n_share_groups_usable",
+    "n_bond_groups_usable",
+    "n_share_groups_reliable",
+    "n_bond_groups_reliable",
+    "n_groups_manual_review",
+    "n_groups_best_source_moex",
+    "n_groups_best_source_tinvest",
+    "max_trade_dates_any",
+    "max_trade_dates_usable",
+    "market_history_start_min",
+    "market_history_end_max",
+]
+
+OWNERSHIP_COLUMNS = [
+    "ownership_report_found_flag",
+    "ownership_head_company_name",
+    "ownership_n_subsidiaries",
+    "ownership_has_head_company_field_flag",
+    "ownership_has_subsidiaries_flag",
+    "ownership_is_subsidiary_flag",
+    "ownership_is_parent_flag",
+    "ownership_ownership_role",
+    "ownership_group_name_inferred",
+    "ownership_state_owned_flag",
+    "ownership_state_bucket",
+    "ownership_group_inference_source",
+    "ownership_group_inference_confidence",
+    "ownership_ownership_review_needed_flag",
+]
+
 MACRO_COLUMNS = [
     "macro_key_rate_avg_q",
     "macro_key_rate_end_q",
@@ -120,6 +166,10 @@ MACRO_COLUMNS = [
     "macro_inflation_yoy_avg_q",
     "macro_inflation_target_avg_q",
     "macro_key_rate_month_end_avg_q",
+    "macro_usdrub_avg_q",
+    "macro_usdrub_end_q",
+    "macro_usdrub_max_q",
+    "macro_usdrub_min_q",
     "covid_flag",
     "post_2022_flag",
 ]
@@ -168,6 +218,8 @@ def select_model_columns(frame: pd.DataFrame) -> pd.DataFrame:
         + FINANCIAL_LEVEL_COLUMNS
         + RATIO_COLUMNS
         + MARKET_FLAG_COLUMNS
+        + MARKET_ACCESS_COLUMNS
+        + OWNERSHIP_COLUMNS
         + MACRO_COLUMNS
         + commodity_columns(frame)
     )
@@ -191,6 +243,11 @@ def build_summary(panel: pd.DataFrame, frequency: str) -> pd.DataFrame:
         {"frequency": frequency, "metric": "rows_with_reporting_data", "value": int(panel["reporting_observed_flag"].fillna(False).sum())},
         {"frequency": frequency, "metric": "rows_with_reporting_data_share", "value": float(panel["reporting_observed_flag"].fillna(False).mean())},
         {"frequency": frequency, "metric": "companies_with_reporting_data", "value": int(companies_with_data["reporting_observed_flag"].fillna(False).sum())},
+        {"frequency": frequency, "metric": "rows_with_usdrub", "value": int(panel["macro_usdrub_avg_q"].notna().sum())},
+        {"frequency": frequency, "metric": "companies_with_state_bucket", "value": int(panel.loc[panel["ownership_state_bucket"].notna(), "company_id"].nunique())},
+        {"frequency": frequency, "metric": "companies_state_owned", "value": int(panel.loc[pd.to_numeric(panel["ownership_state_owned_flag"], errors="coerce").eq(1), "company_id"].nunique())},
+        {"frequency": frequency, "metric": "companies_with_market_history", "value": int(panel.loc[panel["market_has_history_flag"].fillna(False), "company_id"].nunique())},
+        {"frequency": frequency, "metric": "companies_with_usable_market_history", "value": int(panel.loc[panel["market_has_usable_history_flag"].fillna(False), "company_id"].nunique())},
         {
             "frequency": frequency,
             "metric": "oil_gas_companies_with_reporting_data",
@@ -224,6 +281,10 @@ def variable_group(column: str) -> str:
         return "ratio"
     if column in MARKET_FLAG_COLUMNS:
         return "public_market_flag"
+    if column in MARKET_ACCESS_COLUMNS:
+        return "market_access"
+    if column in OWNERSHIP_COLUMNS:
+        return "ownership"
     if column in MACRO_COLUMNS:
         return "macro"
     if column.startswith("cmd_"):
@@ -273,9 +334,57 @@ def variable_description(column: str) -> str:
         "log_assets": "Natural log of total assets.",
         "log_revenue": "Natural log of revenue.",
         "public_market_enriched_flag": "1 if public-market enrichment from the oil-gas pipeline is available.",
+        "market_access_status": "Company-level market access bucket from the cleaned securities layer.",
+        "market_primary_source": "Preferred public market source for the company-level access layer.",
+        "market_has_any_candidate_flag": "1 if at least one public security candidate was found.",
+        "market_has_history_flag": "1 if at least one resolved security has any history.",
+        "market_has_usable_history_flag": "1 if at least one resolved security has usable history coverage.",
+        "market_has_reliable_mapping_flag": "1 if at least one resolved security has reliable issuer mapping.",
+        "market_has_usable_share_flag": "1 if the company has a usable share history.",
+        "market_has_usable_bond_flag": "1 if the company has a usable bond history.",
+        "market_has_reliable_share_flag": "1 if the company has a reliably matched share.",
+        "market_has_reliable_bond_flag": "1 if the company has a reliably matched bond.",
+        "market_needs_manual_review_flag": "1 if the cleaned market-access layer still needs manual review.",
+        "n_security_groups_total": "Number of resolved public security groups linked to the company.",
+        "n_groups_with_history": "Number of resolved security groups with any history.",
+        "n_groups_usable_history": "Number of resolved security groups with usable history.",
+        "n_groups_reliable": "Number of resolved security groups with reliable issuer mapping.",
+        "n_share_groups_usable": "Number of usable share groups.",
+        "n_bond_groups_usable": "Number of usable bond groups.",
+        "n_share_groups_reliable": "Number of reliably matched share groups.",
+        "n_bond_groups_reliable": "Number of reliably matched bond groups.",
+        "n_groups_manual_review": "Number of resolved groups still marked for manual review.",
+        "n_groups_best_source_moex": "Number of resolved groups where MOEX is the preferred source.",
+        "n_groups_best_source_tinvest": "Number of resolved groups where T-Invest is the preferred source.",
+        "max_trade_dates_any": "Maximum number of trade dates across resolved securities for the company.",
+        "max_trade_dates_usable": "Maximum number of trade dates across usable resolved securities.",
+        "market_history_start_min": "Earliest market-history date across resolved securities.",
+        "market_history_end_max": "Latest market-history date across resolved securities.",
+        "ownership_report_found_flag": "1 if an ownership/source SPARK DOCX report was found for the company.",
+        "ownership_head_company_name": "Head company name parsed from SPARK ownership metadata.",
+        "ownership_n_subsidiaries": "Count of subsidiaries parsed from SPARK ownership metadata.",
+        "ownership_has_head_company_field_flag": "1 if the SPARK card explicitly lists a head company.",
+        "ownership_has_subsidiaries_flag": "1 if the SPARK card explicitly lists subsidiaries.",
+        "ownership_is_subsidiary_flag": "1 if the company appears to be a subsidiary.",
+        "ownership_is_parent_flag": "1 if the company appears to be a parent company.",
+        "ownership_ownership_role": "Ownership role inferred from SPARK card: subsidiary, parent, both, or unknown.",
+        "ownership_group_name_inferred": "Inferred business group name from ownership metadata or domain.",
+        "ownership_state_owned_flag": "1 if the company was heuristically inferred as state-owned, 0 if private.",
+        "ownership_state_bucket": "Simplified ownership class: state, private, unknown.",
+        "ownership_group_inference_source": "Field used for ownership/group inference.",
+        "ownership_group_inference_confidence": "Confidence level of ownership/group inference.",
+        "ownership_ownership_review_needed_flag": "1 if ownership inference should be manually reviewed.",
         "macro_key_rate_avg_q": "Average Bank of Russia key rate within quarter.",
         "macro_key_rate_end_q": "Key rate at the end of quarter.",
+        "macro_key_rate_max_q": "Maximum Bank of Russia key rate within quarter.",
+        "macro_key_rate_min_q": "Minimum Bank of Russia key rate within quarter.",
         "macro_inflation_yoy_avg_q": "Average year-on-year inflation within quarter.",
+        "macro_inflation_target_avg_q": "Average inflation target within quarter.",
+        "macro_key_rate_month_end_avg_q": "Average month-end key rate within quarter.",
+        "macro_usdrub_avg_q": "Average USD/RUB exchange rate within quarter.",
+        "macro_usdrub_end_q": "USD/RUB exchange rate at quarter end.",
+        "macro_usdrub_max_q": "Maximum USD/RUB exchange rate within quarter.",
+        "macro_usdrub_min_q": "Minimum USD/RUB exchange rate within quarter.",
         "covid_flag": "1 for 2020-2021 quarters.",
         "post_2022_flag": "1 for quarters from 2022Q1 onward.",
     }
