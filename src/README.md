@@ -32,16 +32,19 @@
   Применяет внешний файл ручной валидации к `additional_public_data.xlsx` и собирает `additional_public_data_validated.xlsx`.
 
 - `build_public_market_workbook.py`
-  Собирает единый `public_market_data_full.xlsx` без СПАРК-отчетностей: shortlist, validated mapping, MOEX, T-Invest, CBR, commodities и compact flags по компаниям.
+  Собирает единый `public_market_data_full.xlsx` без СПАРК-отчетностей: shortlist, validated mapping, MOEX, T-Invest, CBR, commodities и compact flags по компаниям. В `macro_cbr` теперь также входит `USDRUB`.
 
 - `build_public_securities_workbook.py`
   Собирает единый security-universe workbook по всем компаниям: нормализует MOEX + T-Invest инструменты, считает history coverage, строит `security_source_resolution`, отдельный `security_resolution_clean`, company-level `company_market_access_clean`, выделяет `security_manual_review` и сохраняет sidecar CSV по большим history-таблицам.
 
 - `build_analysis_panel.py`
-  Собирает объединенный SPARK-workbook по нефтегазу и металлургии, добавляет `sector` и `sample_flag`, подтягивает квартальные макро/commodity признаки и формирует итоговый `analysis_panel.xlsx`.
+  Собирает объединенный SPARK-workbook по нефтегазу и металлургии, добавляет `sector` и `sample_flag`, подтягивает квартальные макро/commodity признаки, включая квартальные агрегаты `USDRUB`, и формирует итоговый `analysis_panel.xlsx`.
 
 - `build_model_ready_panels.py`
   Берет `analysis_panel.xlsx` и формирует два финальных датасета для эконометрики: `model_ready_quarterly.xlsx` и `model_ready_annual.xlsx`.
+
+- `build_ownership_state_table.py`
+  Собирает `ownership_state_table.xlsx` из raw СПАРК DOCX: вытягивает `Головная компания`, число `Дочерние компании`, строит `ownership_role`, inferred group и эвристический `state_owned_flag` с confidence/source-полями.
 
 - `utils.py`
   Общие функции: нормализация текста, HTTP, логирование, сохранение CSV, загрузка локального `.env`.
@@ -56,6 +59,7 @@
 - [main_public_data.py](/Users/grigorijkrasovickij/Documents/Playground/main_public_data.py)
 - [main_public_market.py](/Users/grigorijkrasovickij/Documents/Playground/main_public_market.py)
 - [main_public_securities.py](/Users/grigorijkrasovickij/Documents/Playground/main_public_securities.py)
+- [main_ownership_state.py](/Users/grigorijkrasovickij/Documents/Playground/main_ownership_state.py)
 - [main_spark.py](/Users/grigorijkrasovickij/Documents/Playground/main_spark.py)
 - [main_analysis_panel.py](/Users/grigorijkrasovickij/Documents/Playground/main_analysis_panel.py)
 - [main_model_ready.py](/Users/grigorijkrasovickij/Documents/Playground/main_model_ready.py)

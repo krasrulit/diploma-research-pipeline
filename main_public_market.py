@@ -8,6 +8,7 @@ import pandas as pd
 
 from src.apply_manual_validation import apply_manual_validation
 from src.build_public_market_workbook import build_public_market_workbook
+from src.load_cbr import load_cbr_macro
 from src.load_tinvest import load_tinvest_optional
 from src.merge_public_data import run_pipeline
 from src.utils import create_session, load_env_file, save_dataframe_csv
@@ -71,6 +72,11 @@ def main() -> None:
         help="With --skip-download, refresh only T-Invest sheets in the existing public workbook.",
     )
     parser.add_argument(
+        "--refresh-cbr",
+        action="store_true",
+        help="With --skip-download, refresh only CBR macro sheets in the existing public workbook.",
+    )
+    parser.add_argument(
         "--disable-tinvest-ssl-verify",
         action="store_true",
         help="Disable SSL verification only for T-Invest in this run. Useful with local SSL interception.",
@@ -126,38 +132,58 @@ def main() -> None:
             with_tinvest=not args.no_tinvest,
             load_tinvest_coupons=not args.no_tinvest_coupons,
         )
-    elif args.refresh_tinvest and not args.no_tinvest:
+    elif (args.refresh_tinvest or args.refresh_cbr) and args.skip_download:
         public_sheets = pd.read_excel(args.public_output, sheet_name=None)
-        companies_master = public_sheets.get("companies_master", pd.DataFrame())
-        tinvest_result = load_tinvest_optional(
-            companies_master=companies_master,
-            output_dir=args.processed_dir,
-            session=create_session(),
-            load_coupons=not args.no_tinvest_coupons,
-        )
-        public_sheets["tinvest_instruments"] = tinvest_result.get("tinvest_instruments", pd.DataFrame())
-        public_sheets["tinvest_bonds"] = tinvest_result.get("tinvest_bonds", pd.DataFrame())
-        public_sheets["tinvest_bond_coupons"] = tinvest_result.get("tinvest_bond_coupons", pd.DataFrame())
+        session = create_session()
 
-        existing_mapping_log = public_sheets.get("mapping_log", pd.DataFrame())
-        if not existing_mapping_log.empty and "source" in existing_mapping_log.columns:
-            existing_mapping_log = existing_mapping_log.loc[~existing_mapping_log["source"].eq("tinvest")].copy()
-        public_sheets["mapping_log"] = pd.concat(
-            [existing_mapping_log, tinvest_result.get("mapping_log", pd.DataFrame())],
-            ignore_index=True,
-            sort=False,
-        )
-        public_sheets["download_log"] = pd.concat(
-            [public_sheets.get("download_log", pd.DataFrame()), tinvest_result.get("download_log", pd.DataFrame())],
-            ignore_index=True,
-            sort=False,
-        )
+        if args.refresh_tinvest and not args.no_tinvest:
+            companies_master = public_sheets.get("companies_master", pd.DataFrame())
+            tinvest_result = load_tinvest_optional(
+                companies_master=companies_master,
+                output_dir=args.processed_dir,
+                session=session,
+                load_coupons=not args.no_tinvest_coupons,
+            )
+            public_sheets["tinvest_instruments"] = tinvest_result.get("tinvest_instruments", pd.DataFrame())
+            public_sheets["tinvest_bonds"] = tinvest_result.get("tinvest_bonds", pd.DataFrame())
+            public_sheets["tinvest_bond_coupons"] = tinvest_result.get("tinvest_bond_coupons", pd.DataFrame())
+
+            existing_mapping_log = public_sheets.get("mapping_log", pd.DataFrame())
+            if not existing_mapping_log.empty and "source" in existing_mapping_log.columns:
+                existing_mapping_log = existing_mapping_log.loc[~existing_mapping_log["source"].eq("tinvest")].copy()
+            public_sheets["mapping_log"] = pd.concat(
+                [existing_mapping_log, tinvest_result.get("mapping_log", pd.DataFrame())],
+                ignore_index=True,
+                sort=False,
+            )
+            public_sheets["download_log"] = pd.concat(
+                [public_sheets.get("download_log", pd.DataFrame()), tinvest_result.get("download_log", pd.DataFrame())],
+                ignore_index=True,
+                sort=False,
+            )
+
+        if args.refresh_cbr:
+            cbr_result = load_cbr_macro(
+                output_dir=args.processed_dir,
+                session=session,
+            )
+            public_sheets["macro_cbr"] = cbr_result.get("macro_cbr", pd.DataFrame())
+
+            existing_download_log = public_sheets.get("download_log", pd.DataFrame())
+            if not existing_download_log.empty and "source" in existing_download_log.columns:
+                existing_download_log = existing_download_log.loc[~existing_download_log["source"].eq("cbr")].copy()
+            public_sheets["download_log"] = pd.concat(
+                [existing_download_log, cbr_result.get("download_log", pd.DataFrame())],
+                ignore_index=True,
+                sort=False,
+            )
 
         with pd.ExcelWriter(args.public_output, engine="openpyxl") as writer:
             for sheet_name, frame in public_sheets.items():
                 frame.to_excel(writer, sheet_name=sheet_name[:31], index=False)
-        for sheet_name in ["tinvest_instruments", "tinvest_bonds", "tinvest_bond_coupons", "mapping_log", "download_log"]:
-            save_dataframe_csv(public_sheets[sheet_name], args.processed_dir / f"{sheet_name}.csv")
+        for sheet_name in ["tinvest_instruments", "tinvest_bonds", "tinvest_bond_coupons", "macro_cbr", "mapping_log", "download_log"]:
+            if sheet_name in public_sheets:
+                save_dataframe_csv(public_sheets[sheet_name], args.processed_dir / f"{sheet_name}.csv")
 
     if args.validation_workbook.exists():
         apply_manual_validation(

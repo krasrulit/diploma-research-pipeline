@@ -224,6 +224,19 @@ def build_macro_quarterly(public_market_workbook: Path) -> pd.DataFrame:
         .reset_index()
     )
 
+    usdrub = macro.loc[macro["series"].eq("usdrub")].copy()
+    usdrub_quarterly = (
+        usdrub.sort_values("obs_date")
+        .groupby("quarter_label", dropna=False)
+        .agg(
+            macro_usdrub_avg_q=("value", "mean"),
+            macro_usdrub_end_q=("value", "last"),
+            macro_usdrub_max_q=("value", "max"),
+            macro_usdrub_min_q=("value", "min"),
+        )
+        .reset_index()
+    )
+
     monthly = macro.loc[macro["series"].isin(["inflation_yoy", "inflation_target", "key_rate_month_end"])].copy()
     monthly_pivot = (
         monthly.pivot_table(
@@ -256,10 +269,11 @@ def build_macro_quarterly(public_market_workbook: Path) -> pd.DataFrame:
         columns={column: f"cmd_{column}_avg_q" for column in commodity_quarterly.columns if column != "quarter_label"}
     )
 
-    macro_quarterly = key_rate_quarterly.merge(monthly_pivot, on="quarter_label", how="left").merge(
-        commodity_quarterly,
-        on="quarter_label",
-        how="left",
+    macro_quarterly = (
+        key_rate_quarterly
+        .merge(monthly_pivot, on="quarter_label", how="left")
+        .merge(usdrub_quarterly, on="quarter_label", how="left")
+        .merge(commodity_quarterly, on="quarter_label", how="left")
     )
     macro_quarterly["quarter_num"] = macro_quarterly["period_type"].map(quarter_num).astype("Int64")
     macro_quarterly["covid_flag"] = (

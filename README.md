@@ -10,6 +10,7 @@
 - [main_public_data.py](/Users/grigorijkrasovickij/Documents/Playground/main_public_data.py) — основной entrypoint для публичных источников.
 - [main_public_market.py](/Users/grigorijkrasovickij/Documents/Playground/main_public_market.py) — полный public-market workbook без СПАРК-отчетностей.
 - [main_public_securities.py](/Users/grigorijkrasovickij/Documents/Playground/main_public_securities.py) — расширенный security-universe pipeline по всем компаниям: MOEX + T-Invest, history coverage, source resolution и manual review по бумагам.
+- [main_ownership_state.py](/Users/grigorijkrasovickij/Documents/Playground/main_ownership_state.py) — сборка ownership/state слоя из raw СПАРК DOCX: дочерность, головная компания, inferred group и state/private flags.
 - [main_spark.py](/Users/grigorijkrasovickij/Documents/Playground/main_spark.py) — entrypoint для парсинга отчетов СПАРК.
 - [main_analysis_panel.py](/Users/grigorijkrasovickij/Documents/Playground/main_analysis_panel.py) — сборка объединенного SPARK-workbook по секторам и итоговой исследовательской панели.
 - [main_model_ready.py](/Users/grigorijkrasovickij/Documents/Playground/main_model_ready.py) — финальный слой `model_ready_quarterly.xlsx` и `model_ready_annual.xlsx`.
@@ -110,6 +111,18 @@ PYTHONPATH=vendor python3 main_public_market.py \
   --disable-tinvest-ssl-verify
 ```
 
+Если нужно быстро переобновить только макро-ряд CBR внутри уже собранного public workbook, включая `USDRUB`:
+
+```bash
+cd /Users/grigorijkrasovickij/Documents/Playground
+PYTHONPATH=vendor python3 main_public_market.py \
+  --shortlist "/Users/grigorijkrasovickij/4 крус/Диплом/Нефтегазовые_компании_shortlist.xlsx" \
+  --skip-download \
+  --refresh-cbr \
+  --public-output "/Users/grigorijkrasovickij/Documents/Playground/data_processed/additional_public_data.xlsx" \
+  --output "/Users/grigorijkrasovickij/Documents/Playground/data_processed/public_market_data_full.xlsx"
+```
+
 ## Запуск 1C. Полный security-universe по всем компаниям
 
 Этот режим собирает именно слой по акциям и облигациям для обеих выборок сразу: нефтегаз + металлургия. На выходе получается единый workbook, где есть:
@@ -153,6 +166,14 @@ python main_spark.py \
   --quarter-grid-start 2014Q3 \
   --quarter-grid-end 2025Q4 \
   --output "/Users/grigorijkrasovickij/Documents/Playground/data_processed/spark_combined_report.xlsx"
+```
+
+## Запуск 2B. Ownership / State table из СПАРК DOCX
+
+```bash
+cd /Users/grigorijkrasovickij/Documents/Playground
+PYTHONPATH=vendor python3 main_ownership_state.py \
+  --output "/Users/grigorijkrasovickij/Documents/Playground/data_processed/ownership_state_table.xlsx"
 ```
 
 ## Запуск 3. Применить ручную валидацию мэппинга
@@ -202,6 +223,7 @@ PYTHONPATH=vendor python3 main_model_ready.py \
 - `tinvest_bonds` — выбранные облигации T-Invest.
 - `tinvest_bond_coupons` — купонный календарь из T-Invest, если включен флаг `--tinvest-coupons`.
 - `macro_cbr` — ключевая ставка и инфляция из Банка России.
+- `macro_cbr` — ключевая ставка, инфляция и `USDRUB` из Банка России.
 - `commodity_prices_monthly` — месячные commodity prices из World Bank Pink Sheet.
 - `commodity_prices_annual` — годовые commodity prices из World Bank Pink Sheet.
 - `mapping_log` — лог сопоставления компаний с инструментами.
@@ -243,6 +265,14 @@ PYTHONPATH=vendor python3 main_model_ready.py \
 - `moex_instruments_all`, `moex_bonds_all`, `tinvest_instruments_all`, `tinvest_bonds_selected`, `tinvest_bond_coupons` — исходные рыночные слои до финального resolution.
 - `security_history_moex`, `security_history_tinvest`, `security_history_all` — long-form history sheets, если они помещаются в Excel-лимит. В любом случае эти же таблицы сохраняются как CSV sidecars в `data_processed/public_securities_all/`.
 - `mapping_log`, `download_log`, `sheet_inventory` — контроль загрузки, ошибок API и того, какие таблицы были реально записаны в workbook.
+
+## Что лежит в `ownership_state_table.xlsx`
+
+- `ownership_state_table` — company-level ownership слой по 174 компаниям: `head_company_name`, `n_subsidiaries`, `is_subsidiary_flag`, `is_parent_flag`, `ownership_role`, `group_name_inferred`, `state_owned_flag`, `state_bucket`, `group_inference_confidence`.
+- `ownership_links` — child → parent связи там, где в СПАРК удалось извлечь `Головная компания`.
+- `ownership_doc_inventory` — какие DOCX использовались и какой файл выбран как актуальный при дублях.
+- `ownership_parse_log` — лог разбора raw DOCX для ownership-слоя.
+- `ownership_summary` — сводка покрытия и числа найденных parent/subsidiary/state/private кейсов.
 
 ## Что лежит в `spark_combined_report.xlsx`
 
