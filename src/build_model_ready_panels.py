@@ -158,6 +158,46 @@ OWNERSHIP_COLUMNS = [
     "ownership_ownership_review_needed_flag",
 ]
 
+CBONDS_STATIC_COLUMNS = [
+    "cbonds_issue_card_found_flag",
+    "cbonds_issue_count",
+    "cbonds_issue_count_high_conf",
+    "cbonds_issue_count_outstanding",
+    "cbonds_issue_count_redeemed",
+    "cbonds_issue_count_default",
+    "cbonds_issue_count_need_quotes_high",
+    "cbonds_issue_count_need_quotes_lower",
+    "cbonds_issue_count_manual_review",
+    "cbonds_issue_currency_count",
+    "cbonds_issue_volume_sum",
+    "cbonds_issue_volume_rub_sum",
+    "cbonds_circulation_volume_sum",
+    "cbonds_circulation_volume_rub_sum",
+    "cbonds_outstanding_issue_volume_rub_sum",
+    "cbonds_has_rating_issue_flag",
+    "cbonds_has_listing_issue_flag",
+    "cbonds_has_offer_issue_flag",
+    "cbonds_first_registration_date",
+    "cbonds_first_placement_end_date",
+    "cbonds_last_maturity_date",
+    "cbonds_coupon_rate_avg_pct",
+    "cbonds_coupon_rate_max_pct",
+    "cbonds_borrower_match_high_conf_flag",
+]
+
+CBONDS_QUARTERLY_COLUMNS = [
+    "cbonds_issue_registration_q_count",
+    "cbonds_issue_registration_q_volume_rub",
+    "cbonds_issue_placement_q_count",
+    "cbonds_issue_placement_q_volume_rub",
+    "cbonds_issue_maturity_q_count",
+    "cbonds_issue_maturity_q_volume_rub",
+    "cbonds_issue_offer_q_count",
+    "cbonds_issue_offer_q_price_avg",
+    "cbonds_issue_outstanding_q_count",
+    "cbonds_issue_outstanding_q_volume_rub",
+]
+
 MACRO_COLUMNS = [
     "macro_key_rate_avg_q",
     "macro_key_rate_end_q",
@@ -197,6 +237,13 @@ def winsorize_series(series: pd.Series, lower_q: float = 0.01, upper_q: float = 
     return out.clip(lower=lower, upper=upper)
 
 
+def as_bool_series(series: pd.Series) -> pd.Series:
+    if series.dtype == bool:
+        return series.fillna(False)
+    text = series.fillna("").astype(str).str.strip().str.lower()
+    return text.isin({"1", "1.0", "true", "yes"})
+
+
 def add_engineered_columns(panel: pd.DataFrame) -> pd.DataFrame:
     out = panel.copy()
     out["net_debt"] = out["total_debt"] - out["cash"]
@@ -220,6 +267,8 @@ def select_model_columns(frame: pd.DataFrame) -> pd.DataFrame:
         + MARKET_FLAG_COLUMNS
         + MARKET_ACCESS_COLUMNS
         + OWNERSHIP_COLUMNS
+        + CBONDS_STATIC_COLUMNS
+        + CBONDS_QUARTERLY_COLUMNS
         + MACRO_COLUMNS
         + commodity_columns(frame)
     )
@@ -233,6 +282,10 @@ def build_summary(panel: pd.DataFrame, frequency: str) -> pd.DataFrame:
         .max()
         .reset_index()
     )
+    market_history_mask = as_bool_series(panel["market_has_history_flag"])
+    market_usable_mask = as_bool_series(panel["market_has_usable_history_flag"])
+    cbonds_issue_mask = as_bool_series(panel["cbonds_issue_card_found_flag"])
+    cbonds_outstanding_mask = pd.to_numeric(panel["cbonds_issue_outstanding_q_count"], errors="coerce").fillna(0).gt(0)
     rows = [
         {"frequency": frequency, "metric": "n_rows", "value": len(panel)},
         {"frequency": frequency, "metric": "n_unique_companies", "value": int(panel["company_id"].nunique())},
@@ -246,8 +299,10 @@ def build_summary(panel: pd.DataFrame, frequency: str) -> pd.DataFrame:
         {"frequency": frequency, "metric": "rows_with_usdrub", "value": int(panel["macro_usdrub_avg_q"].notna().sum())},
         {"frequency": frequency, "metric": "companies_with_state_bucket", "value": int(panel.loc[panel["ownership_state_bucket"].notna(), "company_id"].nunique())},
         {"frequency": frequency, "metric": "companies_state_owned", "value": int(panel.loc[pd.to_numeric(panel["ownership_state_owned_flag"], errors="coerce").eq(1), "company_id"].nunique())},
-        {"frequency": frequency, "metric": "companies_with_market_history", "value": int(panel.loc[panel["market_has_history_flag"].fillna(False), "company_id"].nunique())},
-        {"frequency": frequency, "metric": "companies_with_usable_market_history", "value": int(panel.loc[panel["market_has_usable_history_flag"].fillna(False), "company_id"].nunique())},
+        {"frequency": frequency, "metric": "companies_with_market_history", "value": int(panel.loc[market_history_mask, "company_id"].nunique())},
+        {"frequency": frequency, "metric": "companies_with_usable_market_history", "value": int(panel.loc[market_usable_mask, "company_id"].nunique())},
+        {"frequency": frequency, "metric": "companies_with_cbonds_issue_cards", "value": int(panel.loc[cbonds_issue_mask, "company_id"].nunique())},
+        {"frequency": frequency, "metric": "rows_with_cbonds_outstanding_issue", "value": int(cbonds_outstanding_mask.sum())},
         {
             "frequency": frequency,
             "metric": "oil_gas_companies_with_reporting_data",
@@ -285,6 +340,10 @@ def variable_group(column: str) -> str:
         return "market_access"
     if column in OWNERSHIP_COLUMNS:
         return "ownership"
+    if column in CBONDS_STATIC_COLUMNS:
+        return "cbonds_static"
+    if column in CBONDS_QUARTERLY_COLUMNS:
+        return "cbonds_quarterly"
     if column in MACRO_COLUMNS:
         return "macro"
     if column.startswith("cmd_"):
@@ -374,6 +433,40 @@ def variable_description(column: str) -> str:
         "ownership_group_inference_source": "Field used for ownership/group inference.",
         "ownership_group_inference_confidence": "Confidence level of ownership/group inference.",
         "ownership_ownership_review_needed_flag": "1 if ownership inference should be manually reviewed.",
+        "cbonds_issue_card_found_flag": "1 if at least one Cbonds issue card was parsed for the company.",
+        "cbonds_issue_count": "Number of deduplicated Cbonds bond issues linked to the company.",
+        "cbonds_issue_count_high_conf": "Number of Cbonds bond issues with high-confidence mapping after borrower/card validation.",
+        "cbonds_issue_count_outstanding": "Number of Cbonds bond issues currently marked as outstanding.",
+        "cbonds_issue_count_redeemed": "Number of Cbonds bond issues currently marked as redeemed.",
+        "cbonds_issue_count_default": "Number of Cbonds bond issues currently marked as defaulted.",
+        "cbonds_issue_count_need_quotes_high": "Number of bond issues ranked as definitely needing quote history collection.",
+        "cbonds_issue_count_need_quotes_lower": "Number of bond issues ranked as lower-priority quote history collection.",
+        "cbonds_issue_count_manual_review": "Number of bond issues that should be manually reviewed before collecting quotes.",
+        "cbonds_issue_currency_count": "Number of distinct currencies across Cbonds bond issues for the company.",
+        "cbonds_issue_volume_sum": "Total issue volume across parsed Cbonds bond issues, regardless of currency.",
+        "cbonds_issue_volume_rub_sum": "Total issue volume across RUB-denominated Cbonds bond issues.",
+        "cbonds_circulation_volume_sum": "Total circulation volume across parsed Cbonds bond issues, regardless of currency.",
+        "cbonds_circulation_volume_rub_sum": "Total circulation volume across RUB-denominated Cbonds bond issues.",
+        "cbonds_outstanding_issue_volume_rub_sum": "Approximate total RUB circulation volume of issues still outstanding.",
+        "cbonds_has_rating_issue_flag": "1 if any parsed Cbonds issue card contains issue ratings.",
+        "cbonds_has_listing_issue_flag": "1 if any parsed Cbonds issue card contains listing information.",
+        "cbonds_has_offer_issue_flag": "1 if any parsed Cbonds issue card contains offer or early redemption conditions.",
+        "cbonds_first_registration_date": "Earliest bond registration date across parsed Cbonds issue cards for the company.",
+        "cbonds_first_placement_end_date": "Earliest placement-end date across parsed Cbonds issue cards for the company.",
+        "cbonds_last_maturity_date": "Latest maturity date across parsed Cbonds issue cards for the company.",
+        "cbonds_coupon_rate_avg_pct": "Average coupon rate across parsed coupon schedules from Cbonds issue cards.",
+        "cbonds_coupon_rate_max_pct": "Maximum coupon rate across parsed coupon schedules from Cbonds issue cards.",
+        "cbonds_borrower_match_high_conf_flag": "1 if at least one parsed Cbonds borrower name strongly matches the target company.",
+        "cbonds_issue_registration_q_count": "Number of bond issues registered in the quarter according to Cbonds issue cards.",
+        "cbonds_issue_registration_q_volume_rub": "RUB issue volume of bond issues registered in the quarter.",
+        "cbonds_issue_placement_q_count": "Number of bond issues with placement ending in the quarter according to Cbonds issue cards.",
+        "cbonds_issue_placement_q_volume_rub": "RUB issue volume of bond issues placed in the quarter.",
+        "cbonds_issue_maturity_q_count": "Number of bond issues maturing in the quarter according to Cbonds issue cards.",
+        "cbonds_issue_maturity_q_volume_rub": "RUB circulation volume of bond issues maturing in the quarter.",
+        "cbonds_issue_offer_q_count": "Number of bond offer / early redemption events in the quarter according to Cbonds issue cards.",
+        "cbonds_issue_offer_q_price_avg": "Average offer price across bond offer events in the quarter.",
+        "cbonds_issue_outstanding_q_count": "Approximate number of issues outstanding in the quarter based on placement and maturity dates.",
+        "cbonds_issue_outstanding_q_volume_rub": "Approximate RUB circulation volume of issues outstanding in the quarter based on placement and maturity dates.",
         "macro_key_rate_avg_q": "Average Bank of Russia key rate within quarter.",
         "macro_key_rate_end_q": "Key rate at the end of quarter.",
         "macro_key_rate_max_q": "Maximum Bank of Russia key rate within quarter.",

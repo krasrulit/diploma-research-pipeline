@@ -19,6 +19,7 @@ DEFAULT_METALLURGY_SPARK = PROJECT_ROOT / "data_processed" / "spark_metallurgy_r
 DEFAULT_PUBLIC_MARKET = PROJECT_ROOT / "data_processed" / "public_market_data_full.xlsx"
 DEFAULT_OWNERSHIP = PROJECT_ROOT / "data_processed" / "ownership_state_table.xlsx"
 DEFAULT_SECURITIES = PROJECT_ROOT / "data_processed" / "public_securities_all_companies_optimized_lite.xlsx"
+DEFAULT_CBONDS = PROJECT_ROOT / "data_processed" / "cbonds_bond_cards_processed.xlsx"
 DEFAULT_SPARK_COMBINED = PROJECT_ROOT / "data_processed" / "spark_sector_combined_2014q3_2025q4.xlsx"
 DEFAULT_ANALYSIS_OUTPUT = PROJECT_ROOT / "data_processed" / "analysis_panel.xlsx"
 
@@ -400,6 +401,35 @@ def load_ownership_state(ownership_workbook: Path) -> pd.DataFrame:
     return out.rename(columns=rename_map)
 
 
+def load_cbonds_company_summary(cbonds_workbook: Path) -> pd.DataFrame:
+    try:
+        summary = pd.read_excel(cbonds_workbook, sheet_name="company_bond_summary_model")
+    except ValueError:
+        summary = pd.read_excel(cbonds_workbook, sheet_name="company_bond_summary")
+    summary = summary.copy()
+    summary["company_id"] = summary["company_id"].astype(str).str.strip()
+    date_columns = [
+        "cbonds_first_registration_date",
+        "cbonds_first_placement_end_date",
+        "cbonds_last_maturity_date",
+    ]
+    for column in date_columns:
+        if column in summary.columns:
+            summary[column] = pd.to_datetime(summary[column], errors="coerce")
+    return summary
+
+
+def load_cbonds_company_quarterly(cbonds_workbook: Path) -> pd.DataFrame:
+    try:
+        quarterly = pd.read_excel(cbonds_workbook, sheet_name="company_bond_quarterly_model")
+    except ValueError:
+        quarterly = pd.read_excel(cbonds_workbook, sheet_name="company_bond_quarterly")
+    quarterly = quarterly.copy()
+    quarterly["company_id"] = quarterly["company_id"].astype(str).str.strip()
+    quarterly["quarter_label"] = quarterly["quarter_label"].astype(str).str.strip()
+    return quarterly
+
+
 def with_min_count_sum(frame: pd.DataFrame, columns: list[str]) -> pd.Series:
     return frame[columns].sum(axis=1, min_count=1)
 
@@ -410,11 +440,14 @@ def build_analysis_panel_quarterly(
     public_market_workbook: Path,
     ownership_workbook: Path,
     securities_workbook: Path,
+    cbonds_workbook: Path,
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
     macro_quarterly = build_macro_quarterly(public_market_workbook)
     public_market_flags = load_public_market_flags(public_market_workbook)
     clean_market_access = load_clean_market_access(securities_workbook)
     ownership_state = load_ownership_state(ownership_workbook)
+    cbonds_company_summary = load_cbonds_company_summary(cbonds_workbook)
+    cbonds_company_quarterly = load_cbonds_company_quarterly(cbonds_workbook)
     macro_for_merge = macro_quarterly.drop(
         columns=["report_year", "period_type", "quarter_num", "quarter_end_date"],
         errors="ignore",
@@ -441,6 +474,8 @@ def build_analysis_panel_quarterly(
         .merge(public_market_flags, on="inn", how="left")
         .merge(clean_market_access, on="company_id", how="left")
         .merge(ownership_state, on="company_id", how="left")
+        .merge(cbonds_company_summary, on="company_id", how="left")
+        .merge(cbonds_company_quarterly, on=["company_id", "quarter_label"], how="left")
     )
     panel["public_market_enriched_flag"] = panel["public_market_enriched_flag"].fillna(False)
 
@@ -480,6 +515,7 @@ def build_analysis_summary(
         {"metric": "analysis_rows_with_usdrub", "value": int(analysis_panel_quarterly["macro_usdrub_avg_q"].notna().sum())},
         {"metric": "analysis_companies_with_ownership_state", "value": int(analysis_panel_quarterly.loc[analysis_panel_quarterly["ownership_state_bucket"].notna(), "company_id"].nunique())},
         {"metric": "analysis_companies_with_clean_market_access", "value": int(analysis_panel_quarterly.loc[analysis_panel_quarterly["market_access_status"].notna(), "company_id"].nunique())},
+        {"metric": "analysis_companies_with_cbonds_bonds", "value": int(analysis_panel_quarterly.loc[analysis_panel_quarterly["cbonds_issue_card_found_flag"].fillna(False), "company_id"].nunique())},
     ]
     return pd.DataFrame(rows)
 
@@ -499,6 +535,7 @@ def build_analysis_outputs(
     public_market_workbook: Path = DEFAULT_PUBLIC_MARKET,
     ownership_workbook: Path = DEFAULT_OWNERSHIP,
     securities_workbook: Path = DEFAULT_SECURITIES,
+    cbonds_workbook: Path = DEFAULT_CBONDS,
     spark_combined_output: Path = DEFAULT_SPARK_COMBINED,
     analysis_output: Path = DEFAULT_ANALYSIS_OUTPUT,
 ) -> dict[str, pd.DataFrame]:
@@ -511,6 +548,7 @@ def build_analysis_outputs(
         public_market_workbook=public_market_workbook,
         ownership_workbook=ownership_workbook,
         securities_workbook=securities_workbook,
+        cbonds_workbook=cbonds_workbook,
     )
     analysis_summary = build_analysis_summary(
         companies_master=companies_master,
@@ -538,6 +576,8 @@ def build_analysis_outputs(
         "analysis_panel_quarterly": analysis_panel_quarterly,
         "ownership_state_table": load_ownership_state(ownership_workbook),
         "company_market_access_clean": load_clean_market_access(securities_workbook),
+        "cbonds_company_summary": load_cbonds_company_summary(cbonds_workbook),
+        "cbonds_company_quarterly": load_cbonds_company_quarterly(cbonds_workbook),
         "spark_panel_quarterly": spark_outputs["panel_quarterly"],
         "spark_panel_core": spark_outputs["panel_core"],
         "spark_input_inventory": spark_outputs["input_inventory"],
@@ -563,6 +603,8 @@ def build_analysis_outputs(
         "analysis_summary": analysis_summary,
         "ownership_state_table": load_ownership_state(ownership_workbook),
         "company_market_access_clean": load_clean_market_access(securities_workbook),
+        "cbonds_company_summary": load_cbonds_company_summary(cbonds_workbook),
+        "cbonds_company_quarterly": load_cbonds_company_quarterly(cbonds_workbook),
         "shortlist_log": shortlist_log,
     }
 
@@ -576,6 +618,7 @@ def main() -> None:
     parser.add_argument("--public-market", type=Path, default=DEFAULT_PUBLIC_MARKET)
     parser.add_argument("--ownership", type=Path, default=DEFAULT_OWNERSHIP)
     parser.add_argument("--securities", type=Path, default=DEFAULT_SECURITIES)
+    parser.add_argument("--cbonds", type=Path, default=DEFAULT_CBONDS)
     parser.add_argument("--spark-output", type=Path, default=DEFAULT_SPARK_COMBINED)
     parser.add_argument("--analysis-output", type=Path, default=DEFAULT_ANALYSIS_OUTPUT)
     args = parser.parse_args()
@@ -588,6 +631,7 @@ def main() -> None:
         public_market_workbook=args.public_market,
         ownership_workbook=args.ownership,
         securities_workbook=args.securities,
+        cbonds_workbook=args.cbonds,
         spark_combined_output=args.spark_output,
         analysis_output=args.analysis_output,
     )
