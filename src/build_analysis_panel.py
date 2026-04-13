@@ -19,7 +19,9 @@ DEFAULT_METALLURGY_SPARK = PROJECT_ROOT / "data_processed" / "spark_metallurgy_r
 DEFAULT_PUBLIC_MARKET = PROJECT_ROOT / "data_processed" / "public_market_data_full.xlsx"
 DEFAULT_OWNERSHIP = PROJECT_ROOT / "data_processed" / "ownership_state_table.xlsx"
 DEFAULT_SECURITIES = PROJECT_ROOT / "data_processed" / "public_securities_all_companies_optimized_lite.xlsx"
-DEFAULT_CBONDS = PROJECT_ROOT / "data_processed" / "cbonds_bond_cards_processed.xlsx"
+DEFAULT_CBONDS_VALIDATED = PROJECT_ROOT / "data_processed" / "cbonds_bond_cards_validated.xlsx"
+DEFAULT_CBONDS_PROCESSED = PROJECT_ROOT / "data_processed" / "cbonds_bond_cards_processed.xlsx"
+DEFAULT_CBONDS = DEFAULT_CBONDS_VALIDATED if DEFAULT_CBONDS_VALIDATED.exists() else DEFAULT_CBONDS_PROCESSED
 DEFAULT_SPARK_COMBINED = PROJECT_ROOT / "data_processed" / "spark_sector_combined_2014q3_2025q4.xlsx"
 DEFAULT_ANALYSIS_OUTPUT = PROJECT_ROOT / "data_processed" / "analysis_panel.xlsx"
 
@@ -41,6 +43,55 @@ SHORTLIST_META_COLUMNS = [
     "selection_result",
     "source_sheet",
     "records_merged",
+]
+
+CBONDS_FILL_ZERO_COLUMNS = [
+    "cbonds_issue_count",
+    "cbonds_issue_count_high_conf",
+    "cbonds_issue_count_outstanding",
+    "cbonds_issue_count_redeemed",
+    "cbonds_issue_count_default",
+    "cbonds_issue_count_need_quotes_high",
+    "cbonds_issue_count_need_quotes_lower",
+    "cbonds_issue_count_manual_review",
+    "cbonds_issue_currency_count",
+    "cbonds_issue_volume_sum",
+    "cbonds_issue_volume_rub_sum",
+    "cbonds_circulation_volume_sum",
+    "cbonds_circulation_volume_rub_sum",
+    "cbonds_outstanding_issue_volume_rub_sum",
+    "cbonds_validated_direct_issue_count",
+    "cbonds_group_agent_issue_count",
+    "cbonds_same_group_other_legal_issue_count",
+    "cbonds_structured_linked_issue_count",
+    "cbonds_reassign_not_in_sample_issue_count",
+    "cbonds_unrelated_excluded_issue_count",
+    "cbonds_missing_strong_issue_count",
+    "cbonds_issue_registration_q_count",
+    "cbonds_issue_registration_q_volume_rub",
+    "cbonds_issue_placement_q_count",
+    "cbonds_issue_placement_q_volume_rub",
+    "cbonds_issue_maturity_q_count",
+    "cbonds_issue_maturity_q_volume_rub",
+    "cbonds_issue_offer_q_count",
+    "cbonds_issue_outstanding_q_count",
+    "cbonds_issue_outstanding_q_volume_rub",
+]
+
+CBONDS_FILL_FALSE_COLUMNS = [
+    "cbonds_issue_card_found_flag",
+    "cbonds_has_rating_issue_flag",
+    "cbonds_has_listing_issue_flag",
+    "cbonds_has_offer_issue_flag",
+    "cbonds_borrower_match_high_conf_flag",
+    "cbonds_validated_direct_issue_flag",
+    "cbonds_group_agent_issue_flag",
+    "cbonds_same_group_other_legal_issue_flag",
+    "cbonds_structured_linked_issue_flag",
+    "cbonds_reassign_not_in_sample_issue_flag",
+    "cbonds_unrelated_excluded_issue_flag",
+    "cbonds_any_related_issue_flag",
+    "cbonds_any_nonexcluded_issue_flag",
 ]
 
 
@@ -402,10 +453,19 @@ def load_ownership_state(ownership_workbook: Path) -> pd.DataFrame:
 
 
 def load_cbonds_company_summary(cbonds_workbook: Path) -> pd.DataFrame:
-    try:
-        summary = pd.read_excel(cbonds_workbook, sheet_name="company_bond_summary_model")
-    except ValueError:
-        summary = pd.read_excel(cbonds_workbook, sheet_name="company_bond_summary")
+    last_error: ValueError | None = None
+    for sheet_name in [
+        "company_bond_summary_validated",
+        "company_bond_summary_model",
+        "company_bond_summary",
+    ]:
+        try:
+            summary = pd.read_excel(cbonds_workbook, sheet_name=sheet_name)
+            break
+        except ValueError as exc:
+            last_error = exc
+    else:
+        raise last_error if last_error is not None else ValueError("No compatible Cbonds company summary sheet found")
     summary = summary.copy()
     summary["company_id"] = summary["company_id"].astype(str).str.strip()
     date_columns = [
@@ -420,10 +480,20 @@ def load_cbonds_company_summary(cbonds_workbook: Path) -> pd.DataFrame:
 
 
 def load_cbonds_company_quarterly(cbonds_workbook: Path) -> pd.DataFrame:
-    try:
-        quarterly = pd.read_excel(cbonds_workbook, sheet_name="company_bond_quarterly_model")
-    except ValueError:
-        quarterly = pd.read_excel(cbonds_workbook, sheet_name="company_bond_quarterly")
+    last_error: ValueError | None = None
+    for sheet_name in [
+        "company_bond_quarterly_validated",
+        "company_bond_quarterly_validate",
+        "company_bond_quarterly_model",
+        "company_bond_quarterly",
+    ]:
+        try:
+            quarterly = pd.read_excel(cbonds_workbook, sheet_name=sheet_name)
+            break
+        except ValueError as exc:
+            last_error = exc
+    else:
+        raise last_error if last_error is not None else ValueError("No compatible Cbonds company quarterly sheet found")
     quarterly = quarterly.copy()
     quarterly["company_id"] = quarterly["company_id"].astype(str).str.strip()
     quarterly["quarter_label"] = quarterly["quarter_label"].astype(str).str.strip()
@@ -478,6 +548,12 @@ def build_analysis_panel_quarterly(
         .merge(cbonds_company_quarterly, on=["company_id", "quarter_label"], how="left")
     )
     panel["public_market_enriched_flag"] = panel["public_market_enriched_flag"].fillna(False)
+    for column in CBONDS_FILL_ZERO_COLUMNS:
+        if column in panel.columns:
+            panel[column] = pd.to_numeric(panel[column], errors="coerce").fillna(0)
+    for column in CBONDS_FILL_FALSE_COLUMNS:
+        if column in panel.columns:
+            panel[column] = panel[column].fillna(False).astype(bool)
 
     panel["total_debt"] = with_min_count_sum(panel, ["debt_lt", "debt_st"])
     panel["debt_to_assets"] = panel["total_debt"] / panel["assets_total"]
