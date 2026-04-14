@@ -8,7 +8,7 @@ import numpy as np
 import pandas as pd
 
 from .load_shortlist import load_shortlist
-from .utils import normalize_identifier
+from .utils import clean_text, normalize_identifier, normalize_isin, normalize_ticker, strip_legal_form
 
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
@@ -24,6 +24,7 @@ DEFAULT_CBONDS_PROCESSED = PROJECT_ROOT / "data_processed" / "cbonds_bond_cards_
 DEFAULT_CBONDS = DEFAULT_CBONDS_VALIDATED if DEFAULT_CBONDS_VALIDATED.exists() else DEFAULT_CBONDS_PROCESSED
 DEFAULT_SPARK_COMBINED = PROJECT_ROOT / "data_processed" / "spark_sector_combined_2014q3_2025q4.xlsx"
 DEFAULT_ANALYSIS_OUTPUT = PROJECT_ROOT / "data_processed" / "analysis_panel.xlsx"
+DEFAULT_SAMPLE_ADDITIONS = PROJECT_ROOT / "data_raw" / "sample_additions.csv"
 
 SPARK_SHEETS = ["input_inventory", "panel_core", "panel_quarterly", "coverage", "parse_log"]
 SHORTLIST_META_COLUMNS = [
@@ -40,6 +41,8 @@ SHORTLIST_META_COLUMNS = [
     "industry",
     "sample_flag",
     "sample_membership",
+    "manual_inclusion_flag",
+    "manual_inclusion_reason",
     "selection_result",
     "source_sheet",
     "records_merged",
@@ -158,11 +161,137 @@ def add_sector_to_shortlist(shortlist_path: Path, sector: str) -> tuple[pd.DataF
     return companies_master, log
 
 
-def combine_shortlists(oil_gas_shortlist: Path, metallurgy_shortlist: Path) -> tuple[pd.DataFrame, pd.DataFrame]:
+def load_sample_additions(additions_path: Path) -> tuple[pd.DataFrame, pd.DataFrame]:
+    if not additions_path.exists():
+        return pd.DataFrame(), pd.DataFrame()
+
+    if additions_path.suffix.lower() in {".xlsx", ".xls"}:
+        raw = pd.read_excel(additions_path)
+    else:
+        raw = pd.read_csv(additions_path)
+
+    if raw.empty:
+        return pd.DataFrame(), pd.DataFrame()
+
+    out = raw.copy()
+    for column in [
+        "sector",
+        "company_name",
+        "company_name_short",
+        "company_name_full",
+        "company_name_en",
+        "inn",
+        "ogrn",
+        "ticker",
+        "isin",
+        "spark_id",
+        "industry",
+        "sample_flag",
+        "selection_result",
+        "manual_inclusion_reason",
+    ]:
+        if column not in out.columns:
+            out[column] = np.nan
+
+    out["sector"] = out["sector"].map(clean_text)
+    out["company_name"] = out["company_name"].map(clean_text)
+    out["company_name_short"] = out["company_name_short"].map(clean_text)
+    out["company_name_full"] = out["company_name_full"].map(clean_text)
+    out["company_name_en"] = out["company_name_en"].map(clean_text)
+    out["inn"] = out["inn"].map(lambda value: normalize_identifier(value, length=10))
+    out["ogrn"] = out["ogrn"].map(lambda value: normalize_identifier(value, length=13))
+    out["ticker"] = out["ticker"].map(normalize_ticker)
+    out["isin"] = out["isin"].map(normalize_isin)
+    out["spark_id"] = out["spark_id"].map(lambda value: normalize_identifier(value))
+    out["industry"] = out["industry"].map(clean_text)
+    out["sample_flag"] = out["sample_flag"].map(clean_text).replace("", np.nan).fillna("main")
+    out["selection_result"] = out["selection_result"].map(clean_text).replace("", np.nan).fillna("manual_addition")
+    out["manual_inclusion_reason"] = (
+        out["manual_inclusion_reason"]
+        .map(clean_text)
+        .replace("", np.nan)
+        .fillna("manual_sample_addition")
+    )
+    out["company_name_core"] = out["company_name"].map(strip_legal_form)
+    out["sample_membership"] = out["sample_flag"].map(lambda value: f"{clean_text(value)},manual_addition")
+    out["source_sheet"] = "manual_additions"
+    out["records_merged"] = 1
+    out["manual_inclusion_flag"] = True
+    out["sample_main_flag"] = out["sample_flag"].eq("main")
+    out["sample_extended_flag"] = out["sample_flag"].eq("extended")
+    out["sector_company_id"] = out.apply(
+        lambda row: f"{row['sector']}:{row['inn']}" if clean_text(row.get("inn", "")) else f"{row['sector']}:{row['company_name']}",
+        axis=1,
+    )
+
+    keep_cols = [
+        "company_name",
+        "company_name_short",
+        "company_name_full",
+        "company_name_en",
+        "company_name_core",
+        "inn",
+        "ogrn",
+        "ticker",
+        "isin",
+        "spark_id",
+        "industry",
+        "sample_flag",
+        "sample_membership",
+        "manual_inclusion_flag",
+        "manual_inclusion_reason",
+        "selection_result",
+        "source_sheet",
+        "records_merged",
+        "sector",
+        "sample_main_flag",
+        "sample_extended_flag",
+        "sector_company_id",
+    ]
+    out = out[keep_cols].copy()
+
+    log = pd.DataFrame(
+        [
+            {
+                "source": "sample_additions",
+                "status": "INFO",
+                "message": "Manual sample addition loaded",
+                "sector": row["sector"],
+                "company_name": row["company_name"],
+                "inn": row["inn"],
+                "sample_flag": row["sample_flag"],
+                "manual_inclusion_reason": row["manual_inclusion_reason"],
+                "shortlist_path": str(additions_path),
+            }
+            for _, row in out.iterrows()
+        ]
+    )
+    return out, log
+
+
+def combine_shortlists(
+    oil_gas_shortlist: Path,
+    metallurgy_shortlist: Path,
+    additions_path: Path = DEFAULT_SAMPLE_ADDITIONS,
+) -> tuple[pd.DataFrame, pd.DataFrame]:
     oil_gas_master, oil_gas_log = add_sector_to_shortlist(oil_gas_shortlist, "oil_gas")
     metallurgy_master, metallurgy_log = add_sector_to_shortlist(metallurgy_shortlist, "metallurgy")
-    companies_master = pd.concat([oil_gas_master, metallurgy_master], ignore_index=True, sort=False)
-    shortlist_log = pd.concat([oil_gas_log, metallurgy_log], ignore_index=True, sort=False)
+    additions_master, additions_log = load_sample_additions(additions_path)
+    companies_master = pd.concat([oil_gas_master, metallurgy_master, additions_master], ignore_index=True, sort=False)
+    if "manual_inclusion_flag" not in companies_master.columns:
+        companies_master["manual_inclusion_flag"] = False
+    else:
+        companies_master["manual_inclusion_flag"] = companies_master["manual_inclusion_flag"].fillna(False)
+    if "manual_inclusion_reason" not in companies_master.columns:
+        companies_master["manual_inclusion_reason"] = ""
+    companies_master = companies_master.sort_values(
+        ["sector", "inn", "manual_inclusion_flag"],
+        ascending=[True, True, False],
+        kind="stable",
+    )
+    companies_master = companies_master.drop_duplicates(subset=["sector_company_id"], keep="first").reset_index(drop=True)
+
+    shortlist_log = pd.concat([oil_gas_log, metallurgy_log, additions_log], ignore_index=True, sort=False)
     return companies_master, shortlist_log
 
 

@@ -80,6 +80,8 @@ def company_meta_lookup(companies_master: pd.DataFrame) -> pd.DataFrame:
         "sector",
         "sample_flag",
         "sample_membership",
+        "manual_inclusion_flag",
+        "manual_inclusion_reason",
         "selection_result",
         "sample_main_flag",
         "sample_extended_flag",
