@@ -372,9 +372,20 @@ def build_issue_record(ws, mapped_row: pd.Series) -> tuple[dict[str, object], pd
     else:
         issue_key = f"sheet:{sheet_name}"
 
-    coupon_rates = pd.to_numeric(coupon_schedule.get("coupon_rate_pct"), errors="coerce")
-    quote_dates = pd.to_datetime(quote_snapshot.get("quote_datetime"), errors="coerce")
-    offers = pd.to_datetime(offer_terms.get("offer_date"), errors="coerce")
+    if not coupon_schedule.empty and "coupon_rate_pct" in coupon_schedule.columns:
+        coupon_rates = pd.to_numeric(coupon_schedule["coupon_rate_pct"], errors="coerce")
+    else:
+        coupon_rates = pd.Series(dtype=float)
+
+    if not quote_snapshot.empty and "quote_datetime" in quote_snapshot.columns:
+        quote_dates = pd.to_datetime(quote_snapshot["quote_datetime"], errors="coerce")
+    else:
+        quote_dates = pd.Series(dtype="datetime64[ns]")
+
+    if not offer_terms.empty and "offer_date" in offer_terms.columns:
+        offers = pd.to_datetime(offer_terms["offer_date"], errors="coerce")
+    else:
+        offers = pd.Series(dtype="datetime64[ns]")
 
     issue_row = {
         "sheet_name": sheet_name,
