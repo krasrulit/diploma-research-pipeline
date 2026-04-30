@@ -11,6 +11,7 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_ANALYSIS_PANEL = PROJECT_ROOT / "data_processed" / "analysis_panel.xlsx"
 DEFAULT_QUARTERLY_OUTPUT = PROJECT_ROOT / "data_processed" / "model_ready_quarterly.xlsx"
 DEFAULT_ANNUAL_OUTPUT = PROJECT_ROOT / "data_processed" / "model_ready_annual.xlsx"
+DEFAULT_FINAL_OUTPUT = PROJECT_ROOT / "data_processed" / "regression_ready_final.xlsx"
 
 BASE_IDENTIFIER_COLUMNS = [
     "company_id",
@@ -215,6 +216,49 @@ CBONDS_QUARTERLY_COLUMNS = [
     "cbonds_issue_outstanding_q_volume_rub",
 ]
 
+CBONDS_EVENT_STATIC_COLUMNS = [
+    "cbonds_calendar_found_flag",
+    "cbonds_calendar_event_count",
+    "cbonds_calendar_issue_count",
+    "cbonds_calendar_first_event_date",
+    "cbonds_calendar_last_event_date",
+    "cbonds_calendar_bookbuilding_count",
+    "cbonds_calendar_placement_count",
+    "cbonds_calendar_additional_placement_count",
+    "cbonds_calendar_coupon_payment_count",
+    "cbonds_calendar_offer_put_count",
+    "cbonds_calendar_offer_call_count",
+    "cbonds_calendar_offer_other_count",
+    "cbonds_calendar_maturity_count",
+    "cbonds_calendar_early_redemption_count",
+    "cbonds_calendar_amortization_count",
+    "cbonds_calendar_default_count",
+    "cbonds_calendar_other_count",
+    "cbonds_calendar_placement_volume_rub_sum",
+    "cbonds_calendar_coupon_payment_sum",
+    "cbonds_calendar_principal_repayment_sum",
+]
+
+CBONDS_EVENT_QUARTERLY_COLUMNS = [
+    "cbonds_calendar_event_q_count",
+    "cbonds_calendar_issue_q_count",
+    "cbonds_calendar_bookbuilding_q_count",
+    "cbonds_calendar_placement_q_count",
+    "cbonds_calendar_additional_placement_q_count",
+    "cbonds_calendar_coupon_payment_q_count",
+    "cbonds_calendar_offer_put_q_count",
+    "cbonds_calendar_offer_call_q_count",
+    "cbonds_calendar_offer_other_q_count",
+    "cbonds_calendar_maturity_q_count",
+    "cbonds_calendar_early_redemption_q_count",
+    "cbonds_calendar_amortization_q_count",
+    "cbonds_calendar_default_q_count",
+    "cbonds_calendar_other_q_count",
+    "cbonds_calendar_placement_volume_rub_q",
+    "cbonds_calendar_coupon_payment_sum_q",
+    "cbonds_calendar_principal_repayment_sum_q",
+]
+
 MACRO_COLUMNS = [
     "macro_key_rate_avg_q",
     "macro_key_rate_end_q",
@@ -286,6 +330,8 @@ def select_model_columns(frame: pd.DataFrame) -> pd.DataFrame:
         + OWNERSHIP_COLUMNS
         + CBONDS_STATIC_COLUMNS
         + CBONDS_QUARTERLY_COLUMNS
+        + CBONDS_EVENT_STATIC_COLUMNS
+        + CBONDS_EVENT_QUARTERLY_COLUMNS
         + MACRO_COLUMNS
         + commodity_columns(frame)
     )
@@ -303,6 +349,12 @@ def build_summary(panel: pd.DataFrame, frequency: str) -> pd.DataFrame:
     market_usable_mask = as_bool_series(panel["market_has_usable_history_flag"])
     cbonds_issue_mask = as_bool_series(panel["cbonds_issue_card_found_flag"])
     cbonds_outstanding_mask = pd.to_numeric(panel["cbonds_issue_outstanding_q_count"], errors="coerce").fillna(0).gt(0)
+    cbonds_calendar_mask = as_bool_series(panel["cbonds_calendar_found_flag"]) if "cbonds_calendar_found_flag" in panel.columns else pd.Series(False, index=panel.index)
+    cbonds_calendar_event_mask = (
+        pd.to_numeric(panel["cbonds_calendar_event_q_count"], errors="coerce").fillna(0).gt(0)
+        if "cbonds_calendar_event_q_count" in panel.columns
+        else pd.Series(False, index=panel.index)
+    )
     rows = [
         {"frequency": frequency, "metric": "n_rows", "value": len(panel)},
         {"frequency": frequency, "metric": "n_unique_companies", "value": int(panel["company_id"].nunique())},
@@ -320,6 +372,8 @@ def build_summary(panel: pd.DataFrame, frequency: str) -> pd.DataFrame:
         {"frequency": frequency, "metric": "companies_with_usable_market_history", "value": int(panel.loc[market_usable_mask, "company_id"].nunique())},
         {"frequency": frequency, "metric": "companies_with_cbonds_issue_cards", "value": int(panel.loc[cbonds_issue_mask, "company_id"].nunique())},
         {"frequency": frequency, "metric": "rows_with_cbonds_outstanding_issue", "value": int(cbonds_outstanding_mask.sum())},
+        {"frequency": frequency, "metric": "companies_with_cbonds_calendar", "value": int(panel.loc[cbonds_calendar_mask, "company_id"].nunique())},
+        {"frequency": frequency, "metric": "rows_with_cbonds_calendar_events", "value": int(cbonds_calendar_event_mask.sum())},
         {
             "frequency": frequency,
             "metric": "oil_gas_companies_with_reporting_data",
@@ -361,6 +415,10 @@ def variable_group(column: str) -> str:
         return "cbonds_static"
     if column in CBONDS_QUARTERLY_COLUMNS:
         return "cbonds_quarterly"
+    if column in CBONDS_EVENT_STATIC_COLUMNS:
+        return "cbonds_event_static"
+    if column in CBONDS_EVENT_QUARTERLY_COLUMNS:
+        return "cbonds_event_quarterly"
     if column in MACRO_COLUMNS:
         return "macro"
     if column.startswith("cmd_"):
@@ -501,6 +559,43 @@ def variable_description(column: str) -> str:
         "cbonds_issue_offer_q_price_avg": "Average offer price across bond offer events in the quarter.",
         "cbonds_issue_outstanding_q_count": "Approximate number of issues outstanding in the quarter based on placement and maturity dates.",
         "cbonds_issue_outstanding_q_volume_rub": "Approximate RUB circulation volume of issues outstanding in the quarter based on placement and maturity dates.",
+        "cbonds_calendar_found_flag": "1 if the company has at least one event in the manually exported Cbonds event calendar.",
+        "cbonds_calendar_event_count": "Total number of Cbonds event-calendar rows mapped to the company.",
+        "cbonds_calendar_issue_count": "Number of unique bond issues with Cbonds event-calendar rows mapped to the company.",
+        "cbonds_calendar_first_event_date": "Earliest event date in the Cbonds event calendar for the company.",
+        "cbonds_calendar_last_event_date": "Latest event date in the Cbonds event calendar for the company.",
+        "cbonds_calendar_bookbuilding_count": "Total number of Cbonds bookbuilding events mapped to the company.",
+        "cbonds_calendar_placement_count": "Total number of Cbonds placement events mapped to the company.",
+        "cbonds_calendar_additional_placement_count": "Total number of Cbonds additional-placement events mapped to the company.",
+        "cbonds_calendar_coupon_payment_count": "Total number of Cbonds coupon-payment events mapped to the company.",
+        "cbonds_calendar_offer_put_count": "Total number of Cbonds put-offer events mapped to the company.",
+        "cbonds_calendar_offer_call_count": "Total number of Cbonds call-option events mapped to the company.",
+        "cbonds_calendar_offer_other_count": "Total number of other Cbonds offer events mapped to the company.",
+        "cbonds_calendar_maturity_count": "Total number of Cbonds maturity events mapped to the company.",
+        "cbonds_calendar_early_redemption_count": "Total number of early-redemption events mapped to the company.",
+        "cbonds_calendar_amortization_count": "Total number of amortization events mapped to the company.",
+        "cbonds_calendar_default_count": "Total number of default events mapped to the company.",
+        "cbonds_calendar_other_count": "Total number of other Cbonds event-calendar rows mapped to the company.",
+        "cbonds_calendar_placement_volume_rub_sum": "Sum of RUB issue volumes on mapped Cbonds placement-calendar rows.",
+        "cbonds_calendar_coupon_payment_sum": "Sum of coupon payment amounts available in mapped Cbonds calendar rows.",
+        "cbonds_calendar_principal_repayment_sum": "Sum of principal repayment amounts available in mapped Cbonds calendar rows.",
+        "cbonds_calendar_event_q_count": "Number of Cbonds event-calendar rows mapped to the company-quarter.",
+        "cbonds_calendar_issue_q_count": "Number of unique bond issues with Cbonds event-calendar rows in the company-quarter.",
+        "cbonds_calendar_bookbuilding_q_count": "Number of Cbonds bookbuilding events in the company-quarter.",
+        "cbonds_calendar_placement_q_count": "Number of Cbonds placement events in the company-quarter.",
+        "cbonds_calendar_additional_placement_q_count": "Number of Cbonds additional-placement events in the company-quarter.",
+        "cbonds_calendar_coupon_payment_q_count": "Number of Cbonds coupon-payment events in the company-quarter.",
+        "cbonds_calendar_offer_put_q_count": "Number of Cbonds put-offer events in the company-quarter.",
+        "cbonds_calendar_offer_call_q_count": "Number of Cbonds call-option events in the company-quarter.",
+        "cbonds_calendar_offer_other_q_count": "Number of other Cbonds offer events in the company-quarter.",
+        "cbonds_calendar_maturity_q_count": "Number of Cbonds maturity events in the company-quarter.",
+        "cbonds_calendar_early_redemption_q_count": "Number of early-redemption events in the company-quarter.",
+        "cbonds_calendar_amortization_q_count": "Number of amortization events in the company-quarter.",
+        "cbonds_calendar_default_q_count": "Number of default events in the company-quarter.",
+        "cbonds_calendar_other_q_count": "Number of other Cbonds event-calendar rows in the company-quarter.",
+        "cbonds_calendar_placement_volume_rub_q": "RUB issue volume on mapped Cbonds placement-calendar rows in the company-quarter.",
+        "cbonds_calendar_coupon_payment_sum_q": "Coupon payment amount available in mapped Cbonds calendar rows in the company-quarter.",
+        "cbonds_calendar_principal_repayment_sum_q": "Principal repayment amount available in mapped Cbonds calendar rows in the company-quarter.",
         "macro_key_rate_avg_q": "Average Bank of Russia key rate within quarter.",
         "macro_key_rate_end_q": "Key rate at the end of quarter.",
         "macro_key_rate_max_q": "Maximum Bank of Russia key rate within quarter.",
@@ -545,10 +640,52 @@ def write_workbook(path: Path, panel: pd.DataFrame, summary: pd.DataFrame, varia
         variable_dictionary.to_excel(writer, sheet_name="variable_dictionary", index=False)
 
 
+def read_optional_sheet(workbook: Path, sheet_name: str) -> pd.DataFrame:
+    try:
+        return pd.read_excel(workbook, sheet_name=sheet_name)
+    except ValueError:
+        return pd.DataFrame()
+
+
+def write_final_regression_workbook(
+    path: Path,
+    quarterly_panel: pd.DataFrame,
+    annual_panel: pd.DataFrame,
+    quarterly_summary: pd.DataFrame,
+    annual_summary: pd.DataFrame,
+    quarterly_dictionary: pd.DataFrame,
+    annual_dictionary: pd.DataFrame,
+    analysis_panel_workbook: Path,
+) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    variable_dictionary = pd.concat([quarterly_dictionary, annual_dictionary], ignore_index=True, sort=False)
+    summary = pd.concat([quarterly_summary, annual_summary], ignore_index=True, sort=False)
+
+    extra_sheets = {
+        "companies_master": read_optional_sheet(analysis_panel_workbook, "companies_master"),
+        "cbonds_company_summary": read_optional_sheet(analysis_panel_workbook, "cbonds_company_summary"),
+        "cbonds_event_co_coverage": read_optional_sheet(analysis_panel_workbook, "cbonds_event_co_coverage"),
+        "cbonds_event_missing": read_optional_sheet(analysis_panel_workbook, "cbonds_event_missing"),
+        "cbonds_event_issue_cov": read_optional_sheet(analysis_panel_workbook, "cbonds_event_issue_cov"),
+        "ownership_state_table": read_optional_sheet(analysis_panel_workbook, "ownership_state_table"),
+        "company_market_access_clean": read_optional_sheet(analysis_panel_workbook, "company_market_access_clean"),
+    }
+
+    with pd.ExcelWriter(path, engine="openpyxl") as writer:
+        quarterly_panel.to_excel(writer, sheet_name="quarterly_panel", index=False)
+        annual_panel.to_excel(writer, sheet_name="annual_panel", index=False)
+        summary.to_excel(writer, sheet_name="summary", index=False)
+        variable_dictionary.to_excel(writer, sheet_name="variable_dictionary", index=False)
+        for sheet_name, frame in extra_sheets.items():
+            if not frame.empty:
+                frame.to_excel(writer, sheet_name=sheet_name[:31], index=False)
+
+
 def build_model_ready_panels(
     analysis_panel_workbook: Path = DEFAULT_ANALYSIS_PANEL,
     quarterly_output: Path = DEFAULT_QUARTERLY_OUTPUT,
     annual_output: Path = DEFAULT_ANNUAL_OUTPUT,
+    final_output: Path | None = DEFAULT_FINAL_OUTPUT,
 ) -> dict[str, pd.DataFrame]:
     panel = pd.read_excel(analysis_panel_workbook, sheet_name="analysis_panel_quarterly")
     quarterly_panel = add_engineered_columns(select_model_columns(panel).copy())
@@ -561,12 +698,24 @@ def build_model_ready_panels(
 
     write_workbook(quarterly_output, quarterly_panel, quarterly_summary, quarterly_dictionary)
     write_workbook(annual_output, annual_panel, annual_summary, annual_dictionary)
+    if final_output is not None:
+        write_final_regression_workbook(
+            path=final_output,
+            quarterly_panel=quarterly_panel,
+            annual_panel=annual_panel,
+            quarterly_summary=quarterly_summary,
+            annual_summary=annual_summary,
+            quarterly_dictionary=quarterly_dictionary,
+            annual_dictionary=annual_dictionary,
+            analysis_panel_workbook=analysis_panel_workbook,
+        )
 
     return {
         "quarterly_panel": quarterly_panel,
         "annual_panel": annual_panel,
         "quarterly_summary": quarterly_summary,
         "annual_summary": annual_summary,
+        "final_output": pd.DataFrame([{"path": "" if final_output is None else str(final_output)}]),
     }
 
 
@@ -575,15 +724,18 @@ def main() -> None:
     parser.add_argument("--analysis-panel", type=Path, default=DEFAULT_ANALYSIS_PANEL)
     parser.add_argument("--quarterly-output", type=Path, default=DEFAULT_QUARTERLY_OUTPUT)
     parser.add_argument("--annual-output", type=Path, default=DEFAULT_ANNUAL_OUTPUT)
+    parser.add_argument("--final-output", type=Path, default=DEFAULT_FINAL_OUTPUT)
     args = parser.parse_args()
 
     outputs = build_model_ready_panels(
         analysis_panel_workbook=args.analysis_panel,
         quarterly_output=args.quarterly_output,
         annual_output=args.annual_output,
+        final_output=args.final_output,
     )
     print(f"Quarterly workbook: {args.quarterly_output}")
     print(f"Annual workbook: {args.annual_output}")
+    print(f"Final combined workbook: {args.final_output}")
     print(f"Quarterly rows: {len(outputs['quarterly_panel'])}")
     print(f"Annual rows: {len(outputs['annual_panel'])}")
 

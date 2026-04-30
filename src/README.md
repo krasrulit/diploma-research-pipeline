@@ -38,10 +38,13 @@
   Собирает единый security-universe workbook по всем компаниям: нормализует MOEX + T-Invest инструменты, считает history coverage, строит `security_source_resolution`, отдельный `security_resolution_clean`, company-level `company_market_access_clean`, выделяет `security_manual_review` и сохраняет sidecar CSV по большим history-таблицам.
 
 - `build_analysis_panel.py`
-  Собирает объединенный SPARK-workbook по нефтегазу и металлургии, добавляет `sector` и `sample_flag`, подтягивает квартальные макро/commodity признаки, включая квартальные агрегаты `USDRUB`, и формирует итоговый `analysis_panel.xlsx`.
+  Собирает объединенный SPARK-workbook по нефтегазу и металлургии, добавляет `sector` и `sample_flag`, подтягивает квартальные макро/commodity признаки, включая квартальные агрегаты `USDRUB`, добавляет Cbonds-календарь событий по облигациям и формирует итоговый `analysis_panel.xlsx`.
+
+- `build_cbonds_event_calendar.py`
+  Парсит вручную выгруженный `Календарь_событий.xlsx` из Cbonds, маппит события по ISIN и имени эмитента на компании из `companies_master`, строит квартальные event-признаки и файл контроля компаний, у которых есть Cbonds-облигации, но нет календаря событий.
 
 - `build_model_ready_panels.py`
-  Берет `analysis_panel.xlsx` и формирует два финальных датасета для эконометрики: `model_ready_quarterly.xlsx` и `model_ready_annual.xlsx`.
+  Берет `analysis_panel.xlsx` и формирует финальные датасеты для эконометрики: `model_ready_quarterly.xlsx`, `model_ready_annual.xlsx` и сводный `regression_ready_final.xlsx`.
 
 - `build_ownership_state_table.py`
   Собирает `ownership_state_table.xlsx` из raw СПАРК DOCX: вытягивает `Головная компания`, число `Дочерние компании`, строит `ownership_role`, inferred group и эвристический `state_owned_flag` с confidence/source-полями.
@@ -62,4 +65,5 @@
 - [main_ownership_state.py](/Users/grigorijkrasovickij/Documents/Playground/main_ownership_state.py)
 - [main_spark.py](/Users/grigorijkrasovickij/Documents/Playground/main_spark.py)
 - [main_analysis_panel.py](/Users/grigorijkrasovickij/Documents/Playground/main_analysis_panel.py)
+- [main_cbonds_event_calendar.py](/Users/grigorijkrasovickij/Documents/Playground/main_cbonds_event_calendar.py)
 - [main_model_ready.py](/Users/grigorijkrasovickij/Documents/Playground/main_model_ready.py)

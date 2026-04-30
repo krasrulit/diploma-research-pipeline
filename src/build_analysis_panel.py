@@ -9,6 +9,16 @@ import pandas as pd
 
 from .load_shortlist import load_shortlist
 from .utils import clean_text, normalize_identifier, normalize_isin, normalize_ticker, strip_legal_form
+from .build_cbonds_event_calendar import (
+    DEFAULT_EVENT_CALENDAR,
+    DEFAULT_EVENT_MISSING_OUTPUT,
+    DEFAULT_EVENT_OUTPUT,
+    DEFAULT_QUOTES_WORKBOOK,
+    QUARTERLY_EVENT_COLUMNS,
+    STATIC_EVENT_COUNT_COLUMNS,
+    build_cbonds_event_layers,
+    write_event_workbooks,
+)
 
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
@@ -22,6 +32,10 @@ DEFAULT_SECURITIES = PROJECT_ROOT / "data_processed" / "public_securities_all_co
 DEFAULT_CBONDS_VALIDATED = PROJECT_ROOT / "data_processed" / "cbonds_bond_cards_validated.xlsx"
 DEFAULT_CBONDS_PROCESSED = PROJECT_ROOT / "data_processed" / "cbonds_bond_cards_processed.xlsx"
 DEFAULT_CBONDS = DEFAULT_CBONDS_VALIDATED if DEFAULT_CBONDS_VALIDATED.exists() else DEFAULT_CBONDS_PROCESSED
+DEFAULT_CBONDS_QUOTES = DEFAULT_QUOTES_WORKBOOK
+DEFAULT_CBONDS_EVENT_CALENDAR = DEFAULT_EVENT_CALENDAR
+DEFAULT_CBONDS_EVENT_OUTPUT = DEFAULT_EVENT_OUTPUT
+DEFAULT_CBONDS_EVENT_MISSING_OUTPUT = DEFAULT_EVENT_MISSING_OUTPUT
 DEFAULT_SPARK_COMBINED = PROJECT_ROOT / "data_processed" / "spark_sector_combined_2014q3_2025q4.xlsx"
 DEFAULT_ANALYSIS_OUTPUT = PROJECT_ROOT / "data_processed" / "analysis_panel.xlsx"
 DEFAULT_SAMPLE_ADDITIONS = PROJECT_ROOT / "data_raw" / "sample_additions.csv"
@@ -95,6 +109,17 @@ CBONDS_FILL_FALSE_COLUMNS = [
     "cbonds_unrelated_excluded_issue_flag",
     "cbonds_any_related_issue_flag",
     "cbonds_any_nonexcluded_issue_flag",
+]
+
+CBONDS_EVENT_FILL_ZERO_COLUMNS = STATIC_EVENT_COUNT_COLUMNS + QUARTERLY_EVENT_COLUMNS
+
+CBONDS_EVENT_FILL_FALSE_COLUMNS = [
+    "cbonds_calendar_found_flag",
+]
+
+CBONDS_EVENT_DATE_COLUMNS = [
+    "cbonds_calendar_first_event_date",
+    "cbonds_calendar_last_event_date",
 ]
 
 
@@ -640,6 +665,8 @@ def build_analysis_panel_quarterly(
     ownership_workbook: Path,
     securities_workbook: Path,
     cbonds_workbook: Path,
+    cbonds_event_company_summary: pd.DataFrame | None = None,
+    cbonds_event_company_quarterly: pd.DataFrame | None = None,
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
     macro_quarterly = build_macro_quarterly(public_market_workbook)
     public_market_flags = load_public_market_flags(public_market_workbook)
@@ -647,6 +674,10 @@ def build_analysis_panel_quarterly(
     ownership_state = load_ownership_state(ownership_workbook)
     cbonds_company_summary = load_cbonds_company_summary(cbonds_workbook)
     cbonds_company_quarterly = load_cbonds_company_quarterly(cbonds_workbook)
+    if cbonds_event_company_summary is None:
+        cbonds_event_company_summary = pd.DataFrame(columns=["company_id"])
+    if cbonds_event_company_quarterly is None:
+        cbonds_event_company_quarterly = pd.DataFrame(columns=["company_id", "quarter_label"])
     macro_for_merge = macro_quarterly.drop(
         columns=["report_year", "period_type", "quarter_num", "quarter_end_date"],
         errors="ignore",
@@ -675,6 +706,8 @@ def build_analysis_panel_quarterly(
         .merge(ownership_state, on="company_id", how="left")
         .merge(cbonds_company_summary, on="company_id", how="left")
         .merge(cbonds_company_quarterly, on=["company_id", "quarter_label"], how="left")
+        .merge(cbonds_event_company_summary, on="company_id", how="left")
+        .merge(cbonds_event_company_quarterly, on=["company_id", "quarter_label"], how="left")
     )
     panel["public_market_enriched_flag"] = panel["public_market_enriched_flag"].fillna(False)
     for column in CBONDS_FILL_ZERO_COLUMNS:
@@ -683,6 +716,15 @@ def build_analysis_panel_quarterly(
     for column in CBONDS_FILL_FALSE_COLUMNS:
         if column in panel.columns:
             panel[column] = panel[column].fillna(False).astype(bool)
+    for column in CBONDS_EVENT_FILL_ZERO_COLUMNS:
+        if column in panel.columns:
+            panel[column] = pd.to_numeric(panel[column], errors="coerce").fillna(0)
+    for column in CBONDS_EVENT_FILL_FALSE_COLUMNS:
+        if column in panel.columns:
+            panel[column] = panel[column].fillna(False).astype(bool)
+    for column in CBONDS_EVENT_DATE_COLUMNS:
+        if column in panel.columns:
+            panel[column] = pd.to_datetime(panel[column], errors="coerce")
 
     panel["total_debt"] = with_min_count_sum(panel, ["debt_lt", "debt_st"])
     panel["debt_to_assets"] = panel["total_debt"] / panel["assets_total"]
@@ -721,6 +763,8 @@ def build_analysis_summary(
         {"metric": "analysis_companies_with_ownership_state", "value": int(analysis_panel_quarterly.loc[analysis_panel_quarterly["ownership_state_bucket"].notna(), "company_id"].nunique())},
         {"metric": "analysis_companies_with_clean_market_access", "value": int(analysis_panel_quarterly.loc[analysis_panel_quarterly["market_access_status"].notna(), "company_id"].nunique())},
         {"metric": "analysis_companies_with_cbonds_bonds", "value": int(analysis_panel_quarterly.loc[analysis_panel_quarterly["cbonds_issue_card_found_flag"].fillna(False), "company_id"].nunique())},
+        {"metric": "analysis_companies_with_cbonds_calendar", "value": int(analysis_panel_quarterly.loc[analysis_panel_quarterly.get("cbonds_calendar_found_flag", False).fillna(False), "company_id"].nunique()) if "cbonds_calendar_found_flag" in analysis_panel_quarterly.columns else 0},
+        {"metric": "analysis_rows_with_cbonds_calendar_events", "value": int(pd.to_numeric(analysis_panel_quarterly.get("cbonds_calendar_event_q_count", 0), errors="coerce").fillna(0).gt(0).sum()) if "cbonds_calendar_event_q_count" in analysis_panel_quarterly.columns else 0},
     ]
     return pd.DataFrame(rows)
 
@@ -741,12 +785,27 @@ def build_analysis_outputs(
     ownership_workbook: Path = DEFAULT_OWNERSHIP,
     securities_workbook: Path = DEFAULT_SECURITIES,
     cbonds_workbook: Path = DEFAULT_CBONDS,
+    cbonds_quotes_workbook: Path = DEFAULT_CBONDS_QUOTES,
+    cbonds_event_calendar: Path | None = DEFAULT_CBONDS_EVENT_CALENDAR,
+    cbonds_event_output: Path = DEFAULT_CBONDS_EVENT_OUTPUT,
+    cbonds_event_missing_output: Path = DEFAULT_CBONDS_EVENT_MISSING_OUTPUT,
     spark_combined_output: Path = DEFAULT_SPARK_COMBINED,
     analysis_output: Path = DEFAULT_ANALYSIS_OUTPUT,
 ) -> dict[str, pd.DataFrame]:
     companies_master, shortlist_log = combine_shortlists(oil_gas_shortlist, metallurgy_shortlist)
     spark_outputs = combine_spark_workbooks(oil_gas_spark, metallurgy_spark, companies_master)
     shortlist_coverage, shortlist_coverage_summary = build_shortlist_coverage(companies_master, spark_outputs["input_inventory"])
+    cbonds_event_layers = build_cbonds_event_layers(
+        calendar_workbook=cbonds_event_calendar,
+        companies_master=companies_master,
+        cbonds_workbook=cbonds_workbook,
+        quotes_workbook=cbonds_quotes_workbook,
+    )
+    write_event_workbooks(
+        cbonds_event_layers,
+        processed_output=cbonds_event_output,
+        missing_output=cbonds_event_missing_output,
+    )
     analysis_panel_quarterly, macro_quarterly = build_analysis_panel_quarterly(
         spark_panel_quarterly=spark_outputs["panel_quarterly"],
         companies_master=companies_master,
@@ -754,6 +813,8 @@ def build_analysis_outputs(
         ownership_workbook=ownership_workbook,
         securities_workbook=securities_workbook,
         cbonds_workbook=cbonds_workbook,
+        cbonds_event_company_summary=cbonds_event_layers["cbonds_event_company_summary"],
+        cbonds_event_company_quarterly=cbonds_event_layers["cbonds_event_company_quarterly"],
     )
     analysis_summary = build_analysis_summary(
         companies_master=companies_master,
@@ -783,6 +844,12 @@ def build_analysis_outputs(
         "company_market_access_clean": load_clean_market_access(securities_workbook),
         "cbonds_company_summary": load_cbonds_company_summary(cbonds_workbook),
         "cbonds_company_quarterly": load_cbonds_company_quarterly(cbonds_workbook),
+        "cbonds_event_co_summary": cbonds_event_layers["cbonds_event_company_summary"],
+        "cbonds_event_co_quarter": cbonds_event_layers["cbonds_event_company_quarterly"],
+        "cbonds_event_issue_cov": cbonds_event_layers["cbonds_event_issue_coverage"],
+        "cbonds_event_co_coverage": cbonds_event_layers["cbonds_event_company_coverage"],
+        "cbonds_event_missing": cbonds_event_layers["cbonds_event_missing"],
+        "cbonds_event_parse_log": cbonds_event_layers["cbonds_event_parse_log"],
         "spark_panel_quarterly": spark_outputs["panel_quarterly"],
         "spark_panel_core": spark_outputs["panel_core"],
         "spark_input_inventory": spark_outputs["input_inventory"],
@@ -810,6 +877,13 @@ def build_analysis_outputs(
         "company_market_access_clean": load_clean_market_access(securities_workbook),
         "cbonds_company_summary": load_cbonds_company_summary(cbonds_workbook),
         "cbonds_company_quarterly": load_cbonds_company_quarterly(cbonds_workbook),
+        "cbonds_event_raw": cbonds_event_layers["cbonds_event_raw"],
+        "cbonds_event_co_summary": cbonds_event_layers["cbonds_event_company_summary"],
+        "cbonds_event_co_quarter": cbonds_event_layers["cbonds_event_company_quarterly"],
+        "cbonds_event_issue_cov": cbonds_event_layers["cbonds_event_issue_coverage"],
+        "cbonds_event_co_coverage": cbonds_event_layers["cbonds_event_company_coverage"],
+        "cbonds_event_missing": cbonds_event_layers["cbonds_event_missing"],
+        "cbonds_event_parse_log": cbonds_event_layers["cbonds_event_parse_log"],
         "shortlist_log": shortlist_log,
     }
 
@@ -824,6 +898,10 @@ def main() -> None:
     parser.add_argument("--ownership", type=Path, default=DEFAULT_OWNERSHIP)
     parser.add_argument("--securities", type=Path, default=DEFAULT_SECURITIES)
     parser.add_argument("--cbonds", type=Path, default=DEFAULT_CBONDS)
+    parser.add_argument("--cbonds-quotes", type=Path, default=DEFAULT_CBONDS_QUOTES)
+    parser.add_argument("--cbonds-event-calendar", type=Path, default=DEFAULT_CBONDS_EVENT_CALENDAR)
+    parser.add_argument("--cbonds-event-output", type=Path, default=DEFAULT_CBONDS_EVENT_OUTPUT)
+    parser.add_argument("--cbonds-event-missing-output", type=Path, default=DEFAULT_CBONDS_EVENT_MISSING_OUTPUT)
     parser.add_argument("--spark-output", type=Path, default=DEFAULT_SPARK_COMBINED)
     parser.add_argument("--analysis-output", type=Path, default=DEFAULT_ANALYSIS_OUTPUT)
     args = parser.parse_args()
@@ -837,6 +915,10 @@ def main() -> None:
         ownership_workbook=args.ownership,
         securities_workbook=args.securities,
         cbonds_workbook=args.cbonds,
+        cbonds_quotes_workbook=args.cbonds_quotes,
+        cbonds_event_calendar=args.cbonds_event_calendar,
+        cbonds_event_output=args.cbonds_event_output,
+        cbonds_event_missing_output=args.cbonds_event_missing_output,
         spark_combined_output=args.spark_output,
         analysis_output=args.analysis_output,
     )
@@ -846,6 +928,8 @@ def main() -> None:
     print(f"Companies master: {len(outputs['companies_master'])}")
     print(f"SPARK quarterly rows: {len(outputs['spark_panel_quarterly'])}")
     print(f"Analysis quarterly rows: {len(outputs['analysis_panel_quarterly'])}")
+    print(f"Cbonds calendar rows: {len(outputs['cbonds_event_raw'])}")
+    print(f"Suspicious missing-calendar companies: {len(outputs['cbonds_event_missing'])}")
 
 
 if __name__ == "__main__":
