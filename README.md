@@ -10,10 +10,13 @@
 - [main_public_data.py](/Users/grigorijkrasovickij/Documents/Playground/main_public_data.py) — основной entrypoint для публичных источников.
 - [main_public_market.py](/Users/grigorijkrasovickij/Documents/Playground/main_public_market.py) — полный public-market workbook без СПАРК-отчетностей.
 - [main_public_securities.py](/Users/grigorijkrasovickij/Documents/Playground/main_public_securities.py) — расширенный security-universe pipeline по всем компаниям: MOEX + T-Invest, history coverage, source resolution и manual review по бумагам.
+- [main_cbonds_company_cards_capture.py](/Users/grigorijkrasovickij/Documents/Playground/main_cbonds_company_cards_capture.py) — вспомогательная выгрузка карточек компаний из Cbonds через Excel add-in.
+- [main_h1_regression.py](/Users/grigorijkrasovickij/Documents/Playground/main_h1_regression.py) — базовая проверка H1 по `debt_to_assets ~ cfo_to_assets`.
 - [main_ownership_state.py](/Users/grigorijkrasovickij/Documents/Playground/main_ownership_state.py) — сборка ownership/state слоя из raw СПАРК DOCX: дочерность, головная компания, inferred group и state/private flags.
 - [main_spark.py](/Users/grigorijkrasovickij/Documents/Playground/main_spark.py) — entrypoint для парсинга отчетов СПАРК.
 - [main_analysis_panel.py](/Users/grigorijkrasovickij/Documents/Playground/main_analysis_panel.py) — сборка объединенного SPARK-workbook по секторам и итоговой исследовательской панели.
 - [main_model_ready.py](/Users/grigorijkrasovickij/Documents/Playground/main_model_ready.py) — финальный слой `model_ready_quarterly.xlsx` и `model_ready_annual.xlsx`.
+- [docs/SPARK_PIPELINE.md](/Users/grigorijkrasovickij/Documents/Playground/docs/SPARK_PIPELINE.md) — подробная инструкция по СПАРК-парсеру, входным файлам, листам и проверкам.
 - [src/README.md](/Users/grigorijkrasovickij/Documents/Playground/src/README.md) — подробная карта модулей и того, что делает каждый файл.
 - [data_raw/README.md](/Users/grigorijkrasovickij/Documents/Playground/data_raw/README.md) — что хранить в сыром виде.
 - [data_processed/README.md](/Users/grigorijkrasovickij/Documents/Playground/data_processed/README.md) — какие итоговые файлы появляются после запуска.
@@ -146,6 +149,18 @@ PYTHONPATH=vendor python3 main_public_securities.py \
   --output "/Users/grigorijkrasovickij/Documents/Playground/data_processed/public_securities_all_companies.xlsx"
 ```
 
+Если уже скачаны MOEX/T-Invest sidecar CSV и нужно только пересобрать workbook с ручной проверкой акций и MOEX-review котировками:
+
+```bash
+cd /Users/grigorijkrasovickij/Documents/Playground
+PYTHONPATH=vendor python3 main_public_securities.py \
+  --skip-download \
+  --processed-dir "/Users/grigorijkrasovickij/Documents/Playground/data_processed/public_securities_all_optimized" \
+  --share-manual-review-workbook "/Users/grigorijkrasovickij/Documents/Playground/data_processed/share_manual_review_quotes.xlsx" \
+  --moex-share-review-dir "/Users/grigorijkrasovickij/Documents/Playground/moex_quotes_review" \
+  --output "/Users/grigorijkrasovickij/Documents/Playground/data_processed/public_securities_all_companies_optimized_lite.xlsx"
+```
+
 Если нужен только быстрый smoke-test:
 
 ```bash
@@ -158,9 +173,11 @@ PYTHONPATH=vendor python3 main_public_securities.py \
 
 ## Запуск 2. СПАРК DOCX
 
+Полный код парсера лежит в [src/spark_docx_parser.py](/Users/grigorijkrasovickij/Documents/Playground/src/spark_docx_parser.py), а подробное описание входов/выходов — в [docs/SPARK_PIPELINE.md](/Users/grigorijkrasovickij/Documents/Playground/docs/SPARK_PIPELINE.md).
+
 ```bash
 cd /Users/grigorijkrasovickij/Documents/Playground
-python main_spark.py \
+PYTHONPATH=vendor python3 main_spark.py \
   --input-dir "/Users/grigorijkrasovickij/4 крус/Диплом" \
   --pattern "СПАРК-Отчет_*.docx" \
   --quarter-grid-start 2014Q3 \
@@ -200,6 +217,8 @@ PYTHONPATH=vendor python3 main_analysis_panel.py \
   --oil-gas-spark "/Users/grigorijkrasovickij/Documents/Playground/data_processed/spark_neftegaz_report_2014q3_2025q4.xlsx" \
   --metallurgy-spark "/Users/grigorijkrasovickij/Documents/Playground/data_processed/spark_metallurgy_report_2014q3_2025q4.xlsx" \
   --public-market "/Users/grigorijkrasovickij/Documents/Playground/data_processed/public_market_data_full.xlsx" \
+  --securities "/Users/grigorijkrasovickij/Documents/Playground/data_processed/public_securities_all_companies_optimized_lite.xlsx" \
+  --cbonds-event-calendar "/Users/grigorijkrasovickij/Documents/Playground/Календарь_событий_new.xlsx" \
   --spark-output "/Users/grigorijkrasovickij/Documents/Playground/data_processed/spark_sector_combined_2014q3_2025q4.xlsx" \
   --analysis-output "/Users/grigorijkrasovickij/Documents/Playground/data_processed/analysis_panel.xlsx"
 ```
@@ -211,7 +230,17 @@ cd /Users/grigorijkrasovickij/Documents/Playground
 PYTHONPATH=vendor python3 main_model_ready.py \
   --analysis-panel "/Users/grigorijkrasovickij/Documents/Playground/data_processed/analysis_panel.xlsx" \
   --quarterly-output "/Users/grigorijkrasovickij/Documents/Playground/data_processed/model_ready_quarterly.xlsx" \
-  --annual-output "/Users/grigorijkrasovickij/Documents/Playground/data_processed/model_ready_annual.xlsx"
+  --annual-output "/Users/grigorijkrasovickij/Documents/Playground/data_processed/model_ready_annual.xlsx" \
+  --final-output "/Users/grigorijkrasovickij/Documents/Playground/data_processed/regression_ready_final.xlsx"
+```
+
+## Запуск 6. Проверить базовую H1-регрессию
+
+```bash
+cd /Users/grigorijkrasovickij/Documents/Playground
+PYTHONPATH=vendor python3 main_h1_regression.py \
+  --input "/Users/grigorijkrasovickij/Documents/Playground/data_processed/regression_ready_final.xlsx" \
+  --output "/Users/grigorijkrasovickij/Documents/Playground/data_processed/h1_regression_results.xlsx"
 ```
 
 ## Что лежит в `additional_public_data.xlsx`
@@ -222,7 +251,6 @@ PYTHONPATH=vendor python3 main_model_ready.py \
 - `tinvest_instruments` — все кандидаты инструментов из T-Invest.
 - `tinvest_bonds` — выбранные облигации T-Invest.
 - `tinvest_bond_coupons` — купонный календарь из T-Invest, если включен флаг `--tinvest-coupons`.
-- `macro_cbr` — ключевая ставка и инфляция из Банка России.
 - `macro_cbr` — ключевая ставка, инфляция и `USDRUB` из Банка России.
 - `commodity_prices_monthly` — месячные commodity prices из World Bank Pink Sheet.
 - `commodity_prices_annual` — годовые commodity prices из World Bank Pink Sheet.
@@ -260,15 +288,18 @@ PYTHONPATH=vendor python3 main_model_ready.py \
 - `security_source_resolution` — выбор основного источника по каждой бумаге с учетом coverage; здесь же лежит `manual_review_needed_flag`.
 - `security_resolution_clean` — аналитически очищенный слой по бумагам: `usable_history_flag`, `reliable_mapping_flag`, `market_relevance_bucket`.
 - `security_manual_review` — кейсы, где один тикер ведет к нескольким реальным инструментам или у двух источников почти одинаковое покрытие.
-- `company_security_summary` — сводка по всем 174 компаниям: сколько бумаг найдено, сколько из них с историей, сколько групп требуют ручной сверки.
+- `company_security_summary` — сводка по всем компаниям итоговой выборки: сколько бумаг найдено, сколько из них с историей, сколько групп требуют ручной сверки.
 - `company_market_access_clean` — итоговый company-level market access слой: есть ли вообще публичные бумаги, сколько usable/reliable акций и облигаций, какой источник доминирует, где нужен manual review.
+- `share_manual_review` — нормализованный результат ручной проверки акций из `share_manual_review_quotes.xlsx`.
+- `moex_share_review_history` — MOEX-котировки по акциям, которые были вручную признаны usable.
+- `moex_share_review_security_summary` — сводка по MOEX-review файлам акций.
 - `moex_instruments_all`, `moex_bonds_all`, `tinvest_instruments_all`, `tinvest_bonds_selected`, `tinvest_bond_coupons` — исходные рыночные слои до финального resolution.
 - `security_history_moex`, `security_history_tinvest`, `security_history_all` — long-form history sheets, если они помещаются в Excel-лимит. В любом случае эти же таблицы сохраняются как CSV sidecars в `data_processed/public_securities_all/`.
 - `mapping_log`, `download_log`, `sheet_inventory` — контроль загрузки, ошибок API и того, какие таблицы были реально записаны в workbook.
 
 ## Что лежит в `ownership_state_table.xlsx`
 
-- `ownership_state_table` — company-level ownership слой по 174 компаниям: `head_company_name`, `n_subsidiaries`, `is_subsidiary_flag`, `is_parent_flag`, `ownership_role`, `group_name_inferred`, `state_owned_flag`, `state_bucket`, `group_inference_confidence`.
+- `ownership_state_table` — company-level ownership слой по компаниям итоговой выборки: `head_company_name`, `n_subsidiaries`, `is_subsidiary_flag`, `is_parent_flag`, `ownership_role`, `group_name_inferred`, `state_owned_flag`, `state_bucket`, `group_inference_confidence`.
 - `ownership_links` — child → parent связи там, где в СПАРК удалось извлечь `Головная компания`.
 - `ownership_doc_inventory` — какие DOCX использовались и какой файл выбран как актуальный при дублях.
 - `ownership_parse_log` — лог разбора raw DOCX для ownership-слоя.
@@ -294,7 +325,7 @@ PYTHONPATH=vendor python3 main_model_ready.py \
 
 ## Что лежит в `analysis_panel.xlsx`
 
-- `analysis_panel_quarterly` — основной исследовательский лист: финансовые показатели СПАРК + `sector` + `sample_flag` + квартальные макро/commodity признаки + доступные public-market flags.
+- `analysis_panel_quarterly` — основной исследовательский лист: финансовые показатели СПАРК + `sector` + `sample_flag` + квартальные макро/commodity признаки + public-market/security flags + Cbonds issue/event признаки.
 - `companies_master` — объединенный master-список компаний.
 - `spark_panel_quarterly`, `spark_panel_core`, `spark_input_inventory`, `spark_coverage` — исходные SPARK-слои до последних merge-шагов.
 - `macro_quarterly` — квартальные макро- и commodity-фичи.
@@ -306,6 +337,14 @@ PYTHONPATH=vendor python3 main_model_ready.py \
 - `panel` — итоговая панель для эконометрики: идентификаторы, sector/sample flags, финансовые уровни, derived ratios, public-market flags, квартальные макро- и commodity-признаки.
 - `summary` — компактная сводка по строкам, компаниям и заполненности.
 - `variable_dictionary` — словарь переменных для последующего моделирования.
+
+## Что лежит в `regression_ready_final.xlsx`
+
+- `quarterly_panel` — финальная квартальная панель для регрессий.
+- `annual_panel` — годовая панель на основе Q4-наблюдений.
+- `summary` — сводка по строкам, компаниям и покрытию.
+- `variable_dictionary` — словарь всех колонок: описание, источник, файл/URL, лист и способ расчета.
+- `companies_master`, `cbonds_company_summary`, `cbonds_event_*`, `ownership_state_table`, `company_market_access_clean` — вспомогательные листы для трассировки данных.
 
 ## Официальные источники
 

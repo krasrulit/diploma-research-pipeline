@@ -10,7 +10,7 @@
 - `additional_public_data_validated.xlsx` — workbook после применения ручной проверки к MOEX / T-Invest слоям.
 - `public_market_data_full.xlsx` — полный workbook по публичным источникам без СПАРК-отчетностей.
 - `ownership_state_table.xlsx` — ownership/state слой по компаниям из raw СПАРК DOCX.
-- `public_securities_all_companies.xlsx` — единый security-universe workbook по акциям и облигациям для нефтегаза и металлургии.
+- `public_securities_all_companies.xlsx` / `public_securities_all_companies_optimized_lite.xlsx` — единый security-universe workbook по акциям и облигациям для нефтегаза и металлургии.
 - `spark_combined_report.xlsx` — итоговый workbook по DOCX-отчетам СПАРК.
 - `spark_combined_report_2014q3_2025q4.xlsx` — вариант СПАРК workbook с квартальной сеткой `2014Q3–2025Q4` по всем компаниям из входной папки.
 - `spark_neftegaz_report_2014q3_2025q4.xlsx` — нефтегазовый SPARK workbook.
@@ -19,6 +19,10 @@
 - `analysis_panel.xlsx` — итоговая исследовательская квартальная панель.
 - `model_ready_quarterly.xlsx` — квартальная панель для эконометрики.
 - `model_ready_annual.xlsx` — годовая панель для эконометрики на основе `Q4` наблюдений.
+- `regression_ready_final.xlsx` — финальный сводный workbook для регрессий: quarterly/annual панели, summary, variable dictionary и вспомогательные lineage-листы.
+- `share_manual_review_quotes.xlsx` — ручная проверка акций; используется как входной файл для `main_public_securities.py`.
+- `cbonds_event_calendar_processed.xlsx` — распарсенный Cbonds calendar.
+- `cbonds_event_calendar_missing_check.xlsx` — компании/бумаги, где календарь событий отсутствует и это нужно проверить.
 - `companies_master.csv` — нормализованный shortlist.
 - `moex_instruments.csv` — все найденные кандидаты из MOEX.
 - `moex_bonds.csv` — выбранные облигации MOEX.
@@ -35,7 +39,7 @@
 
 Если какого-то файла нет, это обычно значит, что соответствующий источник не запускался или был отключен.
 
-Для глубокого анализа рынка бумаг удобнее открывать `public_securities_all_companies.xlsx`: там лежат `security_master_all`, `security_history_coverage`, `security_source_resolution`, `security_resolution_clean`, `security_manual_review`, `company_security_summary` и `company_market_access_clean`. Если long history sheets не влезают в Excel, соответствующие CSV sidecars сохраняются в подпапке `data_processed/public_securities_all/`.
+Для глубокого анализа рынка бумаг удобнее открывать `public_securities_all_companies_optimized_lite.xlsx`: там лежат `security_master_all`, `security_history_coverage`, `security_source_resolution`, `security_resolution_clean`, `security_manual_review`, `company_security_summary`, `company_market_access_clean`, `share_manual_review`, `moex_share_review_history` и `moex_share_review_security_summary`. Если long history sheets не влезают в Excel, соответствующие CSV sidecars сохраняются в подпапке `data_processed/public_securities_all_optimized/`.
 
 ## Как пользоваться validated workbook
 
@@ -59,4 +63,4 @@ PYTHONPATH=vendor python3 src/apply_manual_validation.py \
 
 Для межотраслевого анализа удобнее открывать `analysis_panel.xlsx`: там уже объединены нефтегаз и металлургия, добавлены `sector`, `sample_flag`, квартальные макро- и commodity-признаки, а для нефтегаза еще и public-market flags из открытых источников.
 
-Если уже переходите к моделям, удобнее начинать с `model_ready_quarterly.xlsx` и `model_ready_annual.xlsx`: там оставлены только аналитические переменные, а в отдельных листах лежат `summary` и `variable_dictionary`.
+Если уже переходите к моделям, удобнее начинать с `regression_ready_final.xlsx`: там есть `quarterly_panel`, `annual_panel`, `summary`, `variable_dictionary` и вспомогательные листы для трассировки `companies_master`, `cbonds_company_summary`, `cbonds_event_*`, `ownership_state_table`, `company_market_access_clean`.

@@ -33,6 +33,14 @@ def join_unique(values: pd.Series) -> str:
     return " | ".join(result)
 
 
+def first_non_empty(values: pd.Series) -> str:
+    for value in values.dropna().astype(str):
+        text = clean_text(value)
+        if text:
+            return text
+    return ""
+
+
 def normalize_company_columns(frame: pd.DataFrame) -> pd.DataFrame:
     out = frame.copy()
     if "company_inn" in out.columns:
@@ -50,6 +58,59 @@ def normalize_company_columns(frame: pd.DataFrame) -> pd.DataFrame:
     elif "isin" in out.columns:
         out["company_isin"] = out["isin"].map(normalize_isin)
     return out
+
+
+def normalize_share_manual_review(frame: pd.DataFrame | None) -> pd.DataFrame:
+    """Normalize the manually validated share review queue.
+
+    The user-maintained workbook stores the final decision in `usable`:
+    1 means the share mapping is accepted; 0 means it should not be used.
+    """
+    if frame is None or frame.empty:
+        return pd.DataFrame()
+
+    out = frame.copy()
+    def series(column: str, default: object = "") -> pd.Series:
+        if column in out.columns:
+            return out[column]
+        return pd.Series(default, index=out.index)
+
+    out["company_id"] = series("company_id").map(clean_text)
+    out["company_name"] = series("company_name").map(clean_text)
+    out["company_inn"] = series("company_inn").map(lambda value: normalize_identifier(value, length=10))
+    out["sector"] = series("sector").map(clean_text)
+    out["sample_flag"] = series("sample_flag").map(clean_text)
+    out["instrument_type"] = series("instrument_type", "share").map(clean_text)
+    out["ticker"] = series("ticker").map(normalize_ticker)
+    out["isin"] = series("isin").map(normalize_isin)
+    out["instrument_name"] = series("instrument_name").map(clean_text)
+    out["canonical_security_key"] = series("canonical_security_key").map(clean_text)
+    out["review_comment"] = series("review_comment").map(clean_text)
+    out["usable"] = pd.to_numeric(out.get("usable"), errors="coerce")
+    out = out.loc[out["instrument_type"].eq("share") & out["usable"].isin([0, 1])].copy()
+    out["manual_share_reviewed_flag"] = True
+    out["manual_share_usable_flag"] = out["usable"].eq(1)
+    out["manual_share_review_source"] = "share_manual_review_quotes.xlsx:review_queue.usable"
+    keep_cols = [
+        "company_id",
+        "company_name",
+        "company_inn",
+        "sector",
+        "sample_flag",
+        "instrument_type",
+        "ticker",
+        "isin",
+        "instrument_name",
+        "canonical_security_key",
+        "manual_share_reviewed_flag",
+        "manual_share_usable_flag",
+        "manual_share_review_source",
+        "review_comment",
+    ]
+    return out[keep_cols].drop_duplicates(
+        subset=["company_id", "canonical_security_key", "ticker", "isin"],
+        keep="last",
+    )
 
 
 def company_meta_lookup(companies_master: pd.DataFrame) -> pd.DataFrame:
@@ -178,10 +239,15 @@ def prepare_moex_security_master(
     frame["source"] = "moex"
     frame["source_instrument_id"] = frame.get("source_instrument_id", frame.get("secid", "")).map(clean_text)
     frame["source_instrument_id_type"] = "secid"
+    moex_group = frame.get("group", pd.Series(index=frame.index, dtype="object")).map(normalize_text)
+    moex_type = frame.get("type", pd.Series(index=frame.index, dtype="object")).map(normalize_text)
+    # MOEX search also returns futures/options on shares. Treat only cash shares as shares.
+    moex_bond_flag = moex_group.eq("stock_bonds") | moex_type.str.contains("bond", na=False)
+    moex_share_flag = moex_group.eq("stock_shares") | moex_type.isin({"common_share", "preferred_share"})
     frame["instrument_type"] = np.where(
-        frame.get("bond_flag", False).map(bool_value),
+        moex_bond_flag,
         "bond",
-        np.where(frame.get("share_flag", False).map(bool_value), "share", "other"),
+        np.where(moex_share_flag, "share", "other"),
     )
     frame["instrument_name"] = frame.apply(
         lambda row: first_nonempty(row, ["shortname", "name", "emitent_title", "title"]),
@@ -482,6 +548,90 @@ def prepare_tinvest_security_master(
     ).reset_index(drop=True)
 
 
+def prepare_manual_share_security_master(moex_share_review_history: pd.DataFrame | None) -> pd.DataFrame:
+    """Create security-master rows from manually accepted share mappings."""
+    if moex_share_review_history is None or moex_share_review_history.empty:
+        return pd.DataFrame()
+
+    frame = moex_share_review_history.copy()
+    required = ["company_id", "company_inn", "SECID", "canonical_security_key"]
+    if any(column not in frame.columns for column in required):
+        return pd.DataFrame()
+
+    frame["company_id"] = frame["company_id"].map(clean_text)
+    frame["company_inn"] = frame["company_inn"].map(lambda value: normalize_identifier(value, length=10))
+    frame["source_instrument_id"] = frame["SECID"].map(normalize_ticker)
+    frame["canonical_security_key"] = frame["canonical_security_key"].map(clean_text)
+    frame = frame.loc[
+        frame["company_id"].ne("")
+        & frame["company_inn"].ne("")
+        & frame["source_instrument_id"].ne("")
+        & frame["canonical_security_key"].ne("")
+    ].copy()
+    if frame.empty:
+        return pd.DataFrame()
+
+    grouped = (
+        frame.groupby(["company_id", "company_inn", "source_instrument_id", "canonical_security_key"], dropna=False)
+        .agg(
+            company_name=("company_name", first_non_empty),
+            sector=("sector", first_non_empty),
+            sample_flag=("sample_flag", first_non_empty),
+            ticker=("ticker", first_non_empty),
+            isin=("isin", first_non_empty),
+            instrument_name=("instrument_name", first_non_empty),
+        )
+        .reset_index()
+    )
+    grouped["source"] = "moex"
+    grouped["source_instrument_id_type"] = "ticker"
+    grouped["instrument_type"] = "share"
+    grouped["ticker"] = grouped["ticker"].where(grouped["ticker"].map(clean_text).ne(""), grouped["source_instrument_id"])
+    grouped["ticker_collision_key"] = grouped.apply(
+        lambda row: ticker_collision_key(
+            company_inn=clean_text(row.get("company_inn", "")),
+            instrument_type="share",
+            ticker=normalize_ticker(row.get("ticker", "")),
+        ),
+        axis=1,
+    )
+    grouped["match_score"] = 1_000
+    grouped["match_confidence"] = "manual_usable"
+    grouped["selected_flag"] = True
+    grouped["history_candidate_flag"] = True
+    grouped["exact_identifier_match"] = True
+    grouped["match_reasons"] = "manual_share_review_usable"
+    grouped["source_market_sector"] = "moex_quotes_review"
+
+    keep_cols = [
+        "company_id",
+        "company_name",
+        "company_inn",
+        "sector",
+        "sample_flag",
+        "source",
+        "source_instrument_id",
+        "source_instrument_id_type",
+        "instrument_type",
+        "ticker",
+        "isin",
+        "instrument_name",
+        "canonical_security_key",
+        "ticker_collision_key",
+        "source_market_sector",
+        "match_score",
+        "match_confidence",
+        "selected_flag",
+        "history_candidate_flag",
+        "exact_identifier_match",
+        "match_reasons",
+    ]
+    return grouped[keep_cols].drop_duplicates(
+        subset=["company_id", "company_inn", "source", "source_instrument_id", "canonical_security_key"],
+        keep="last",
+    ).reset_index(drop=True)
+
+
 def instrument_lookup(master: pd.DataFrame) -> pd.DataFrame:
     if master.empty:
         return pd.DataFrame(columns=["source", "source_instrument_id"])
@@ -617,6 +767,98 @@ def prepare_moex_history(
     ]
     keep_cols = [column for column in keep_cols if column in history.columns]
     return history[keep_cols].sort_values(["source_instrument_id", "trade_date"], kind="stable").reset_index(drop=True)
+
+
+def prepare_manual_moex_share_review_history(moex_share_review_history: pd.DataFrame | None) -> pd.DataFrame:
+    """Normalize MOEX review quote files without using the automatic instrument lookup."""
+    if moex_share_review_history is None or moex_share_review_history.empty:
+        return pd.DataFrame()
+
+    history = moex_share_review_history.copy()
+    required = ["company_id", "company_inn", "SECID", "TRADEDATE", "canonical_security_key"]
+    if any(column not in history.columns for column in required):
+        return pd.DataFrame()
+
+    history["source"] = "moex"
+    history["source_instrument_id"] = history["SECID"].map(normalize_ticker)
+    history["instrument_type"] = "share"
+    def series(column: str, default: object = "") -> pd.Series:
+        if column in history.columns:
+            return history[column]
+        return pd.Series(default, index=history.index)
+
+    history["company_id"] = history["company_id"].map(clean_text)
+    history["company_name"] = series("company_name").map(clean_text)
+    history["company_inn"] = history["company_inn"].map(lambda value: normalize_identifier(value, length=10))
+    history["sector"] = series("sector").map(clean_text)
+    history["sample_flag"] = series("sample_flag").map(clean_text)
+    history["ticker"] = series("ticker").map(normalize_ticker)
+    history["isin"] = series("isin").map(normalize_isin)
+    history["instrument_name"] = series("instrument_name").map(clean_text)
+    history["canonical_security_key"] = history["canonical_security_key"].map(clean_text)
+    history["ticker_collision_key"] = history.apply(
+        lambda row: ticker_collision_key(
+            company_inn=clean_text(row.get("company_inn", "")),
+            instrument_type="share",
+            ticker=normalize_ticker(row.get("ticker", "")),
+        ),
+        axis=1,
+    )
+    history["trade_date"] = pd.to_datetime(history.get("TRADEDATE"), errors="coerce")
+    history["open_price"] = pd.to_numeric(history.get("OPEN"), errors="coerce")
+    history["high_price"] = pd.to_numeric(history.get("HIGH"), errors="coerce")
+    history["low_price"] = pd.to_numeric(history.get("LOW"), errors="coerce")
+    history["close_price"] = pd.to_numeric(history.get("CLOSE"), errors="coerce")
+    history["volume"] = pd.to_numeric(history.get("VOLUME"), errors="coerce")
+    history["value"] = pd.to_numeric(history.get("VALUE"), errors="coerce")
+    history["yield_close"] = np.nan
+    history["accint"] = np.nan
+    history["match_score"] = pd.to_numeric(series("match_score"), errors="coerce").fillna(1_000)
+    history["match_confidence"] = series("match_confidence", "manual_usable").map(clean_text)
+    history["selected_flag"] = series("selected_flag", True).map(bool_value)
+    history["exact_identifier_match"] = series("exact_identifier_match", True).map(bool_value)
+    history = history.loc[
+        history["company_id"].ne("")
+        & history["company_inn"].ne("")
+        & history["source_instrument_id"].ne("")
+        & history["canonical_security_key"].ne("")
+        & history["trade_date"].notna()
+    ].copy()
+    if history.empty:
+        return pd.DataFrame()
+
+    keep_cols = [
+        "source",
+        "source_instrument_id",
+        "instrument_type",
+        "company_id",
+        "company_name",
+        "company_inn",
+        "sector",
+        "sample_flag",
+        "ticker",
+        "isin",
+        "instrument_name",
+        "canonical_security_key",
+        "ticker_collision_key",
+        "trade_date",
+        "open_price",
+        "high_price",
+        "low_price",
+        "close_price",
+        "volume",
+        "value",
+        "yield_close",
+        "accint",
+        "match_score",
+        "match_confidence",
+        "selected_flag",
+        "exact_identifier_match",
+    ]
+    return history[keep_cols].drop_duplicates(
+        subset=["company_id", "company_inn", "source_instrument_id", "canonical_security_key", "trade_date"],
+        keep="last",
+    ).sort_values(["company_id", "source_instrument_id", "trade_date"], kind="stable").reset_index(drop=True)
 
 
 def prepare_tinvest_history(
@@ -1063,6 +1305,7 @@ def build_company_security_summary(
 
 def build_security_source_resolution_clean(
     resolution: pd.DataFrame,
+    share_manual_review: pd.DataFrame | None = None,
 ) -> pd.DataFrame:
     if resolution.empty:
         return pd.DataFrame()
@@ -1076,14 +1319,61 @@ def build_security_source_resolution_clean(
     clean["reliable_mapping_flag"] = clean["usable_history_flag"] & (
         clean["best_selected_flag"].fillna(False) | clean["best_exact_identifier_match"].fillna(False)
     )
+    clean["manual_share_reviewed_flag"] = False
+    clean["manual_share_usable_flag"] = False
+    clean["manual_share_review_source"] = ""
+    clean["manual_share_review_comment"] = ""
+
+    manual = normalize_share_manual_review(share_manual_review)
+    if not manual.empty:
+        manual = manual.drop_duplicates(subset=["company_id", "canonical_security_key"], keep="last")
+        manual = manual.rename(columns={"review_comment": "manual_share_review_comment"})
+        merge_cols = [
+            "company_id",
+            "canonical_security_key",
+            "manual_share_reviewed_flag",
+            "manual_share_usable_flag",
+            "manual_share_review_source",
+            "manual_share_review_comment",
+        ]
+        clean = clean.merge(manual[merge_cols], on=["company_id", "canonical_security_key"], how="left", suffixes=("", "_manual"))
+        for column in ["manual_share_reviewed_flag", "manual_share_usable_flag"]:
+            manual_column = f"{column}_manual"
+            if manual_column in clean.columns:
+                clean[column] = clean[manual_column].combine_first(clean[column])
+                clean = clean.drop(columns=[manual_column])
+            clean[column] = clean[column].fillna(False).map(bool_value)
+        for column in ["manual_share_review_source", "manual_share_review_comment"]:
+            manual_column = f"{column}_manual"
+            if manual_column in clean.columns:
+                clean[column] = clean[manual_column].combine_first(clean[column])
+                clean = clean.drop(columns=[manual_column])
+            clean[column] = clean[column].fillna("").map(clean_text)
+
+        reviewed_share_mask = clean["instrument_type"].eq("share") & clean["manual_share_reviewed_flag"]
+        approved_share_mask = reviewed_share_mask & clean["manual_share_usable_flag"]
+        rejected_share_mask = reviewed_share_mask & ~clean["manual_share_usable_flag"]
+
+        clean.loc[reviewed_share_mask, "manual_review_needed_flag"] = False
+        clean.loc[approved_share_mask, "reliable_mapping_flag"] = True
+        clean.loc[approved_share_mask, "usable_history_flag"] = clean.loc[approved_share_mask, "history_available_flag"].fillna(False)
+        clean.loc[rejected_share_mask, "usable_history_flag"] = False
+        clean.loc[rejected_share_mask, "reliable_mapping_flag"] = False
+
     clean["market_relevance_bucket"] = np.select(
         [
+            clean["instrument_type"].eq("share") & clean["manual_share_reviewed_flag"] & clean["manual_share_usable_flag"] & clean["history_available_flag"],
+            clean["instrument_type"].eq("share") & clean["manual_share_reviewed_flag"] & clean["manual_share_usable_flag"],
+            clean["instrument_type"].eq("share") & clean["manual_share_reviewed_flag"] & ~clean["manual_share_usable_flag"],
             clean["reliable_mapping_flag"],
             clean["usable_history_flag"],
             clean["history_available_flag"],
             clean["manual_review_needed_flag"],
         ],
         [
+            "manual_approved_share_history",
+            "manual_approved_share_no_history",
+            "manual_rejected_share",
             "reliable_history",
             "usable_history",
             "history_manual_review",
@@ -1119,6 +1409,10 @@ def build_security_source_resolution_clean(
         "history_available_flag",
         "usable_history_flag",
         "reliable_mapping_flag",
+        "manual_share_reviewed_flag",
+        "manual_share_usable_flag",
+        "manual_share_review_source",
+        "manual_share_review_comment",
         "market_relevance_bucket",
     ]
     keep_cols = [column for column in keep_cols if column in clean.columns]
@@ -1153,31 +1447,74 @@ def build_company_market_access_clean(
             "n_groups_manual_review",
             "n_groups_best_source_moex",
             "n_groups_best_source_tinvest",
+            "n_share_groups_manual_reviewed",
+            "n_share_groups_manual_approved",
+            "n_share_groups_manual_rejected",
             "max_trade_dates_any",
             "max_trade_dates_usable",
         ]
         for column in fill_zero_cols:
             out[column] = 0
+        out["manual_approved_share_tickers"] = ""
+        out["manual_approved_share_isins"] = ""
         out["market_history_start_min"] = pd.NaT
         out["market_history_end_max"] = pd.NaT
     else:
         work = resolution_clean.copy()
+        reviewed_series = (
+            work["manual_share_reviewed_flag"].map(bool_value)
+            if "manual_share_reviewed_flag" in work.columns
+            else pd.Series(False, index=work.index)
+        )
+        usable_series = (
+            work["manual_share_usable_flag"].map(bool_value)
+            if "manual_share_usable_flag" in work.columns
+            else pd.Series(False, index=work.index)
+        )
+        history_available_series = (
+            work["history_available_flag"].map(bool_value)
+            if "history_available_flag" in work.columns
+            else pd.Series(False, index=work.index)
+        )
+        usable_history_series = (
+            work["usable_history_flag"].map(bool_value)
+            if "usable_history_flag" in work.columns
+            else pd.Series(False, index=work.index)
+        )
+        reliable_mapping_series = (
+            work["reliable_mapping_flag"].map(bool_value)
+            if "reliable_mapping_flag" in work.columns
+            else pd.Series(False, index=work.index)
+        )
+        manual_review_needed_series = (
+            work["manual_review_needed_flag"].map(bool_value)
+            if "manual_review_needed_flag" in work.columns
+            else pd.Series(False, index=work.index)
+        )
+        manual_share_reviewed = work["instrument_type"].eq("share") & reviewed_series
+        manual_share_approved = manual_share_reviewed & usable_series
+        manual_share_rejected = manual_share_reviewed & ~usable_series
         aggregated = (
-            work.groupby(["company_id", "company_name", "company_inn", "sector", "sample_flag"], dropna=False)
+            work.groupby(["company_id"], dropna=False)
             .agg(
                 n_security_groups_total=("canonical_security_key", "size"),
-                n_groups_with_history=("history_available_flag", lambda values: int(pd.Series(values).fillna(False).sum())),
-                n_groups_usable_history=("usable_history_flag", lambda values: int(pd.Series(values).fillna(False).sum())),
-                n_groups_reliable=("reliable_mapping_flag", lambda values: int(pd.Series(values).fillna(False).sum())),
-                n_share_groups_usable=("instrument_type", lambda values: int(((work.loc[values.index, "instrument_type"] == "share") & work.loc[values.index, "usable_history_flag"].fillna(False)).sum())),
-                n_bond_groups_usable=("instrument_type", lambda values: int(((work.loc[values.index, "instrument_type"] == "bond") & work.loc[values.index, "usable_history_flag"].fillna(False)).sum())),
-                n_share_groups_reliable=("instrument_type", lambda values: int(((work.loc[values.index, "instrument_type"] == "share") & work.loc[values.index, "reliable_mapping_flag"].fillna(False)).sum())),
-                n_bond_groups_reliable=("instrument_type", lambda values: int(((work.loc[values.index, "instrument_type"] == "bond") & work.loc[values.index, "reliable_mapping_flag"].fillna(False)).sum())),
-                n_groups_manual_review=("manual_review_needed_flag", lambda values: int(pd.Series(values).fillna(False).sum())),
+                n_groups_with_history=("history_available_flag", lambda values: int(history_available_series.loc[values.index].sum())),
+                n_groups_usable_history=("usable_history_flag", lambda values: int(usable_history_series.loc[values.index].sum())),
+                n_groups_reliable=("reliable_mapping_flag", lambda values: int(reliable_mapping_series.loc[values.index].sum())),
+                n_share_groups_usable=("instrument_type", lambda values: int((work.loc[values.index, "instrument_type"].eq("share") & usable_history_series.loc[values.index]).sum())),
+                n_bond_groups_usable=("instrument_type", lambda values: int((work.loc[values.index, "instrument_type"].eq("bond") & usable_history_series.loc[values.index]).sum())),
+                n_share_groups_reliable=("instrument_type", lambda values: int((work.loc[values.index, "instrument_type"].eq("share") & reliable_mapping_series.loc[values.index]).sum())),
+                n_bond_groups_reliable=("instrument_type", lambda values: int((work.loc[values.index, "instrument_type"].eq("bond") & reliable_mapping_series.loc[values.index]).sum())),
+                n_groups_manual_review=("manual_review_needed_flag", lambda values: int(manual_review_needed_series.loc[values.index].sum())),
                 n_groups_best_source_moex=("best_source", lambda values: int(pd.Series(values).eq("moex").sum())),
                 n_groups_best_source_tinvest=("best_source", lambda values: int(pd.Series(values).eq("tinvest").sum())),
+                n_share_groups_manual_reviewed=("instrument_type", lambda values: int(manual_share_reviewed.loc[values.index].sum())),
+                n_share_groups_manual_approved=("instrument_type", lambda values: int(manual_share_approved.loc[values.index].sum())),
+                n_share_groups_manual_rejected=("instrument_type", lambda values: int(manual_share_rejected.loc[values.index].sum())),
+                manual_approved_share_tickers=("ticker", lambda values: join_unique(values[manual_share_approved.loc[values.index]])),
+                manual_approved_share_isins=("isin", lambda values: join_unique(values[manual_share_approved.loc[values.index]])),
                 max_trade_dates_any=("best_n_trade_dates", "max"),
-                max_trade_dates_usable=("best_n_trade_dates", lambda values: int(pd.Series(values)[work.loc[values.index, "usable_history_flag"].fillna(False)].max()) if work.loc[values.index, "usable_history_flag"].fillna(False).any() else 0),
+                max_trade_dates_usable=("best_n_trade_dates", lambda values: int(pd.Series(values)[usable_history_series.loc[values.index].to_numpy()].max()) if usable_history_series.loc[values.index].any() else 0),
                 market_history_start_min=("best_history_start", "min"),
                 market_history_end_max=("best_history_end", "max"),
             )
@@ -1185,7 +1522,7 @@ def build_company_market_access_clean(
         )
         out = base.merge(
             aggregated,
-            on=["company_id", "company_name", "company_inn", "sector", "sample_flag"],
+            on=["company_id"],
             how="left",
         )
 
@@ -1201,11 +1538,18 @@ def build_company_market_access_clean(
         "n_groups_manual_review",
         "n_groups_best_source_moex",
         "n_groups_best_source_tinvest",
+        "n_share_groups_manual_reviewed",
+        "n_share_groups_manual_approved",
+        "n_share_groups_manual_rejected",
         "max_trade_dates_any",
         "max_trade_dates_usable",
     ]
     for column in int_columns:
         out[column] = pd.to_numeric(out.get(column), errors="coerce").fillna(0).astype(int)
+    for column in ["manual_approved_share_tickers", "manual_approved_share_isins"]:
+        if column not in out.columns:
+            out[column] = ""
+        out[column] = out[column].fillna("").map(clean_text)
 
     out["market_has_any_candidate_flag"] = out["n_security_groups_total"].gt(0)
     out["market_has_history_flag"] = out["n_groups_with_history"].gt(0)
@@ -1215,6 +1559,7 @@ def build_company_market_access_clean(
     out["market_has_usable_bond_flag"] = out["n_bond_groups_usable"].gt(0)
     out["market_has_reliable_share_flag"] = out["n_share_groups_reliable"].gt(0)
     out["market_has_reliable_bond_flag"] = out["n_bond_groups_reliable"].gt(0)
+    out["market_has_manual_approved_share_flag"] = out["n_share_groups_manual_approved"].gt(0)
     out["market_needs_manual_review_flag"] = out["n_groups_manual_review"].gt(0)
     out["market_access_status"] = np.select(
         [
@@ -1273,6 +1618,7 @@ def build_company_market_access_clean(
         "market_has_usable_bond_flag",
         "market_has_reliable_share_flag",
         "market_has_reliable_bond_flag",
+        "market_has_manual_approved_share_flag",
         "market_needs_manual_review_flag",
         "n_security_groups_total",
         "n_groups_with_history",
@@ -1285,6 +1631,11 @@ def build_company_market_access_clean(
         "n_groups_manual_review",
         "n_groups_best_source_moex",
         "n_groups_best_source_tinvest",
+        "n_share_groups_manual_reviewed",
+        "n_share_groups_manual_approved",
+        "n_share_groups_manual_rejected",
+        "manual_approved_share_tickers",
+        "manual_approved_share_isins",
         "max_trade_dates_any",
         "max_trade_dates_usable",
         "market_history_start_min",
@@ -1334,10 +1685,14 @@ def build_public_securities_outputs(
     tinvest_history: pd.DataFrame,
     mapping_log: pd.DataFrame,
     download_log: pd.DataFrame,
+    share_manual_review: pd.DataFrame | None = None,
+    moex_share_review_history: pd.DataFrame | None = None,
+    moex_share_review_security_summary: pd.DataFrame | None = None,
 ) -> dict[str, pd.DataFrame]:
     moex_master = prepare_moex_security_master(moex_instruments, moex_bonds, companies_master)
+    manual_share_master = prepare_manual_share_security_master(moex_share_review_history)
     tinvest_master = prepare_tinvest_security_master(tinvest_instruments, companies_master)
-    security_master_all = pd.concat([moex_master, tinvest_master], ignore_index=True, sort=False)
+    security_master_all = pd.concat([moex_master, tinvest_master, manual_share_master], ignore_index=True, sort=False)
     if not security_master_all.empty:
         security_master_all = security_master_all.loc[
             security_master_all["instrument_type"].isin(["share", "bond"])
@@ -1350,6 +1705,13 @@ def build_public_securities_outputs(
         ).reset_index(drop=True)
 
     security_history_moex = prepare_moex_history(moex_bond_history, moex_share_history, security_master_all)
+    manual_share_history = prepare_manual_moex_share_review_history(moex_share_review_history)
+    if not manual_share_history.empty:
+        security_history_moex = pd.concat([security_history_moex, manual_share_history], ignore_index=True, sort=False)
+        security_history_moex = security_history_moex.drop_duplicates(
+            subset=["source", "source_instrument_id", "company_inn", "canonical_security_key", "trade_date"],
+            keep="last",
+        )
     security_history_tinvest = prepare_tinvest_history(tinvest_history, security_master_all)
     security_history_all = pd.concat(
         [security_history_moex, security_history_tinvest],
@@ -1359,7 +1721,10 @@ def build_public_securities_outputs(
 
     security_history_coverage = build_security_history_coverage(security_master_all, security_history_all)
     security_source_resolution = build_security_source_resolution(security_history_coverage)
-    security_source_resolution_clean = build_security_source_resolution_clean(security_source_resolution)
+    security_source_resolution_clean = build_security_source_resolution_clean(
+        security_source_resolution,
+        share_manual_review=share_manual_review,
+    )
     security_manual_review = build_security_manual_review(security_history_coverage, security_source_resolution)
     company_security_summary = build_company_security_summary(
         companies_master,
@@ -1392,6 +1757,12 @@ def build_public_securities_outputs(
         "mapping_log": mapping_log,
         "download_log": download_log,
     }
+    if share_manual_review is not None and not share_manual_review.empty:
+        outputs["share_manual_review"] = normalize_share_manual_review(share_manual_review)
+    if moex_share_review_history is not None and not moex_share_review_history.empty:
+        outputs["moex_share_review_history"] = moex_share_review_history
+    if moex_share_review_security_summary is not None and not moex_share_review_security_summary.empty:
+        outputs["moex_share_review_security_summary"] = moex_share_review_security_summary
     return outputs
 
 

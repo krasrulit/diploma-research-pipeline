@@ -444,12 +444,12 @@ def load_moex_data(
             candidates["isin_exact"] = candidates["isin"].fillna("").eq(
                 normalize_isin(company_row.get("isin", ""))
             ) & candidates["isin"].fillna("").ne("")
-            candidates["bond_flag"] = candidates["group"].map(normalize_text).str.contains("bond", na=False) | candidates[
-                "type"
-            ].map(normalize_text).str.contains("bond", na=False)
-            candidates["share_flag"] = candidates["group"].map(normalize_text).str.contains("share", na=False) | candidates[
-                "type"
-            ].map(normalize_text).str.contains("share", na=False)
+            group_norm = candidates["group"].map(normalize_text)
+            type_norm = candidates["type"].map(normalize_text)
+            candidates["bond_flag"] = group_norm.eq("stock_bonds") | type_norm.str.contains("bond", na=False)
+            # MOEX search returns derivatives whose type contains "shares" (for example
+            # option_on_shares). For this project we only want cash equity instruments.
+            candidates["share_flag"] = group_norm.eq("stock_shares") | type_norm.isin({"common_share", "preferred_share"})
             candidates["eligible_universe"] = candidates["share_flag"] | candidates["bond_flag"]
             candidates["selected_flag"] = candidates["eligible_universe"] & (
                 (candidates["match_score"] >= 150)

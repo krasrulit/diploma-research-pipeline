@@ -126,6 +126,7 @@ MARKET_ACCESS_COLUMNS = [
     "market_has_usable_bond_flag",
     "market_has_reliable_share_flag",
     "market_has_reliable_bond_flag",
+    "market_has_manual_approved_share_flag",
     "market_needs_manual_review_flag",
     "n_security_groups_total",
     "n_groups_with_history",
@@ -138,6 +139,11 @@ MARKET_ACCESS_COLUMNS = [
     "n_groups_manual_review",
     "n_groups_best_source_moex",
     "n_groups_best_source_tinvest",
+    "n_share_groups_manual_reviewed",
+    "n_share_groups_manual_approved",
+    "n_share_groups_manual_rejected",
+    "manual_approved_share_tickers",
+    "manual_approved_share_isins",
     "max_trade_dates_any",
     "max_trade_dates_usable",
     "market_history_start_min",
@@ -480,6 +486,7 @@ def variable_description(column: str) -> str:
         "market_has_usable_bond_flag": "1 if the company has a usable bond history.",
         "market_has_reliable_share_flag": "1 if the company has a reliably matched share.",
         "market_has_reliable_bond_flag": "1 if the company has a reliably matched bond.",
+        "market_has_manual_approved_share_flag": "1 if at least one share mapping was manually approved in share_manual_review_quotes.xlsx.",
         "market_needs_manual_review_flag": "1 if the cleaned market-access layer still needs manual review.",
         "n_security_groups_total": "Number of resolved public security groups linked to the company.",
         "n_groups_with_history": "Number of resolved security groups with any history.",
@@ -492,6 +499,11 @@ def variable_description(column: str) -> str:
         "n_groups_manual_review": "Number of resolved groups still marked for manual review.",
         "n_groups_best_source_moex": "Number of resolved groups where MOEX is the preferred source.",
         "n_groups_best_source_tinvest": "Number of resolved groups where T-Invest is the preferred source.",
+        "n_share_groups_manual_reviewed": "Number of share groups that were reviewed manually.",
+        "n_share_groups_manual_approved": "Number of share groups accepted manually as usable/relevant.",
+        "n_share_groups_manual_rejected": "Number of share groups rejected manually.",
+        "manual_approved_share_tickers": "Tickers of manually approved shares linked to the company.",
+        "manual_approved_share_isins": "ISINs of manually approved shares linked to the company.",
         "max_trade_dates_any": "Maximum number of trade dates across resolved securities for the company.",
         "max_trade_dates_usable": "Maximum number of trade dates across usable resolved securities.",
         "market_history_start_min": "Earliest market-history date across resolved securities.",
@@ -618,15 +630,112 @@ def variable_description(column: str) -> str:
     return column.replace("_", " ")
 
 
+def variable_source_info(column: str) -> dict[str, str]:
+    group = variable_group(column)
+    root = PROJECT_ROOT
+    spark_sources = (
+        f"{root / 'data_processed' / 'spark_neftegaz_report_2014q3_2025q4.xlsx'} | "
+        f"{root / 'data_processed' / 'spark_metallurgy_report_2014q3_2025q4.xlsx'}"
+    )
+    public_securities = str(root / "data_processed" / "public_securities_all_companies_optimized.xlsx")
+    analysis_panel = str(root / "data_processed" / "analysis_panel.xlsx")
+
+    if group in {"identifier", "traceability"}:
+        return {
+            "source": "Shortlists / companies_master",
+            "source_file_or_url": analysis_panel,
+            "source_sheet": "companies_master / analysis_panel_quarterly",
+            "derivation": "Company identifiers and sample flags propagated from the master company table.",
+        }
+    if group == "availability":
+        return {
+            "source": "SPARK parsed financial reports",
+            "source_file_or_url": spark_sources,
+            "source_sheet": "raw_long / spark_panel_quarterly / analysis_panel_quarterly",
+            "derivation": "Coverage flags derived from parsed SPARK accounting forms.",
+        }
+    if group == "financial_level":
+        return {
+            "source": "SPARK accounting statements",
+            "source_file_or_url": spark_sources,
+            "source_sheet": "panel_quarterly / spark_panel_core",
+            "derivation": "Parsed from SPARK DOCX reports and normalized into quarterly company observations.",
+        }
+    if group == "ratio":
+        return {
+            "source": "Calculated from SPARK financial statement fields",
+            "source_file_or_url": analysis_panel,
+            "source_sheet": "analysis_panel_quarterly",
+            "derivation": "Ratio/log/winsorized variables computed from financial-level columns in build_model_ready_panels.py.",
+        }
+    if group == "public_market_flag":
+        return {
+            "source": "MOEX / T-Invest / manual public-market validation",
+            "source_file_or_url": str(root / "data_processed" / "public_market_data_full.xlsx"),
+            "source_sheet": "firm_market_flags",
+            "derivation": "Legacy validated public-market flags joined by company INN.",
+        }
+    if group == "market_access":
+        return {
+            "source": "MOEX ISS, T-Invest API, manual share review",
+            "source_file_or_url": public_securities,
+            "source_sheet": "company_market_access_clean / security_resolution_clean / share_manual_review",
+            "derivation": "Company-level aggregation of resolved securities, history coverage, and manually approved/rejected share mappings.",
+        }
+    if group == "ownership":
+        return {
+            "source": "SPARK company cards / ownership parser",
+            "source_file_or_url": analysis_panel,
+            "source_sheet": "ownership_state_table",
+            "derivation": "Parsed/inferred ownership, group and state/private flags from available SPARK card metadata.",
+        }
+    if group in {"cbonds_static", "cbonds_quarterly"}:
+        return {
+            "source": "Cbonds issue cards",
+            "source_file_or_url": analysis_panel,
+            "source_sheet": "cbonds_company_summary / cbonds_company_quarterly",
+            "derivation": "Parsed Cbonds issue-card characteristics and quarter-level issue activity indicators.",
+        }
+    if group in {"cbonds_event_static", "cbonds_event_quarterly"}:
+        return {
+            "source": "Cbonds event calendar export",
+            "source_file_or_url": str(root / "Календарь_событий_new.xlsx"),
+            "source_sheet": "cbonds_event_co_coverage / cbonds_event_co_quarter",
+            "derivation": "Manually exported Cbonds calendar events mapped to companies and aggregated by quarter.",
+        }
+    if group == "macro":
+        return {
+            "source": "Bank of Russia",
+            "source_file_or_url": "https://www.cbr.ru/hd_base/KeyRate/ | https://www.cbr.ru/hd_base/infl/ | https://www.cbr.ru/currency_base/dynamics/",
+            "source_sheet": "macro_quarterly",
+            "derivation": "Daily/monthly CBR data aggregated to quarters; event dummies calculated from calendar dates.",
+        }
+    if group == "commodity":
+        return {
+            "source": "World Bank Pink Sheet commodity prices",
+            "source_file_or_url": "https://www.worldbank.org/en/research/commodity-markets",
+            "source_sheet": "commodity_prices_monthly / macro_quarterly",
+            "derivation": "Monthly commodity price series aggregated to quarterly averages.",
+        }
+    return {
+        "source": "Derived / internal pipeline",
+        "source_file_or_url": analysis_panel,
+        "source_sheet": "analysis_panel_quarterly",
+        "derivation": "Internal technical or derived field.",
+    }
+
+
 def build_variable_dictionary(panel: pd.DataFrame, frequency: str) -> pd.DataFrame:
     rows = []
     for column in panel.columns:
+        source_info = variable_source_info(column)
         rows.append(
             {
                 "frequency": frequency,
                 "column": column,
                 "group": variable_group(column),
                 "description": variable_description(column),
+                **source_info,
             }
         )
     return pd.DataFrame(rows)
