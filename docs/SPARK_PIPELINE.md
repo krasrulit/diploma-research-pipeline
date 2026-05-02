@@ -78,6 +78,40 @@ PYTHONPATH=vendor python3 main_spark.py \
 - `panel_quarterly` — нет ли неожиданных дублей `company_id + quarter_label`;
 - `input_inventory` — не лежат ли в папке PDF или лишние файлы, которые ожидаемо не попали в данные.
 
+## Восстановление строк без `metric_code`
+
+В некоторых отчетах СПАРК код строки не указан, но смысл строки можно восстановить по названию строки и разделу баланса. Например, если:
+
+- `table_title = Бухгалтерский баланс`;
+- `statement_section = IV. ДОЛГОСРОЧНЫЕ ОБЯЗАТЕЛЬСТВА`;
+- `metric_name = Заёмные средства`;
+- `metric_code` пустой,
+
+то строка классифицируется как `debt_lt`.
+
+Аналогично:
+
+- `statement_section = V. КРАТКОСРОЧНЫЕ ОБЯЗАТЕЛЬСТВА`;
+- `metric_name = Заёмные средства`;
+
+классифицируется как `debt_st`.
+
+Если не нужно пересобирать весь SPARK workbook, можно построить отдельный audit-файл:
+
+```bash
+cd /Users/grigorijkrasovickij/Documents/Playground
+PYTHONPATH=vendor python3 main_spark_recovery_audit.py \
+  --output "/Users/grigorijkrasovickij/Documents/Playground/data_processed/spark_metric_recovery_audit.xlsx"
+```
+
+В нем:
+
+- `recovery_needed_long` — только значения, которых раньше не было в `panel_core`, но которые восстановлены новыми fallback-правилами;
+- `recovery_needed_wide` — тот же блок в широком формате для ручной вставки;
+- `debt_recovery_long` / `debt_recovery_wide` — отдельный блок только по `debt_lt` и `debt_st`;
+- `recovered_raw_values` — все raw-строки, распознанные по fallback-правилам;
+- `panel_before_after` — сравнение старого и нового core-слоя.
+
 Для финальной модели основной файл проверки:
 
 ```text

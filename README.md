@@ -14,6 +14,7 @@
 - [main_h1_regression.py](/Users/grigorijkrasovickij/Documents/Playground/main_h1_regression.py) — базовая проверка H1 по `debt_to_assets ~ cfo_to_assets`.
 - [main_ownership_state.py](/Users/grigorijkrasovickij/Documents/Playground/main_ownership_state.py) — сборка ownership/state слоя из raw СПАРК DOCX: дочерность, головная компания, inferred group и state/private flags.
 - [main_spark.py](/Users/grigorijkrasovickij/Documents/Playground/main_spark.py) — entrypoint для парсинга отчетов СПАРК.
+- [main_spark_recovery_audit.py](/Users/grigorijkrasovickij/Documents/Playground/main_spark_recovery_audit.py) — строит отдельный workbook с core-метриками, восстановленными из `metric_name + statement_section`, когда `metric_code` в СПАРК отсутствует.
 - [main_analysis_panel.py](/Users/grigorijkrasovickij/Documents/Playground/main_analysis_panel.py) — сборка объединенного SPARK-workbook по секторам и итоговой исследовательской панели.
 - [main_model_ready.py](/Users/grigorijkrasovickij/Documents/Playground/main_model_ready.py) — финальный слой `model_ready_quarterly.xlsx` и `model_ready_annual.xlsx`.
 - [docs/SPARK_PIPELINE.md](/Users/grigorijkrasovickij/Documents/Playground/docs/SPARK_PIPELINE.md) — подробная инструкция по СПАРК-парсеру, входным файлам, листам и проверкам.
@@ -186,6 +187,23 @@ PYTHONPATH=vendor python3 main_spark.py \
 ```
 
 ## Запуск 2B. Ownership / State table из СПАРК DOCX
+
+Если нужно не пересобирать весь SPARK workbook, а только получить отдельный файл с найденными строками, которые раньше терялись из-за пустого `metric_code`:
+
+```bash
+cd /Users/grigorijkrasovickij/Documents/Playground
+PYTHONPATH=vendor python3 main_spark_recovery_audit.py \
+  --output "/Users/grigorijkrasovickij/Documents/Playground/data_processed/spark_metric_recovery_audit.xlsx"
+```
+
+Важные листы в `spark_metric_recovery_audit.xlsx`:
+
+- `recovery_needed_long` — строки, где старая `panel_core` была пустой, а новое правило восстановило значение.
+- `recovery_needed_wide` — те же значения в широком формате, удобном для ручной вставки.
+- `debt_recovery_long` / `debt_recovery_wide` — отдельный блок только по `debt_lt` и `debt_st`.
+- `recovered_raw_values` — все raw-строки, распознанные по fallback-правилам.
+- `panel_before_after` — сравнение старого и нового core-слоя.
+- `rule_summary` — сколько строк сработало по каждому правилу.
 
 ```bash
 cd /Users/grigorijkrasovickij/Documents/Playground

@@ -63,6 +63,9 @@
 - `spark_docx_parser.py`
   Парсер `.docx`-отчетов СПАРК. Вытаскивает баланс, ОФР и ОДДС, строит `input_inventory`, `raw_long`, `panel_core`, `panel_quarterly`, `coverage`, `parse_log`. Для квартальной панели `FY` нормализуется в `Q4`, а по отсутствующим кварталам остаются пропуски.
 
+- `build_spark_recovery_audit.py`
+  Строит отдельный контрольный workbook по уже готовым `raw_long`: показывает core-метрики, которые можно восстановить без `metric_code`, например `debt_lt` / `debt_st` по связке `Заёмные средства` + раздел баланса `IV/V обязательства`.
+
 ## Точки входа
 
 - [main_public_data.py](/Users/grigorijkrasovickij/Documents/Playground/main_public_data.py)
@@ -70,6 +73,7 @@
 - [main_public_securities.py](/Users/grigorijkrasovickij/Documents/Playground/main_public_securities.py)
 - [main_ownership_state.py](/Users/grigorijkrasovickij/Documents/Playground/main_ownership_state.py)
 - [main_spark.py](/Users/grigorijkrasovickij/Documents/Playground/main_spark.py)
+- [main_spark_recovery_audit.py](/Users/grigorijkrasovickij/Documents/Playground/main_spark_recovery_audit.py)
 - [main_analysis_panel.py](/Users/grigorijkrasovickij/Documents/Playground/main_analysis_panel.py)
 - [main_cbonds_event_calendar.py](/Users/grigorijkrasovickij/Documents/Playground/main_cbonds_event_calendar.py)
 - [main_cbonds_company_cards_capture.py](/Users/grigorijkrasovickij/Documents/Playground/main_cbonds_company_cards_capture.py)

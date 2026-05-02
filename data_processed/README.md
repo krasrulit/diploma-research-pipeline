@@ -15,6 +15,7 @@
 - `spark_combined_report_2014q3_2025q4.xlsx` — вариант СПАРК workbook с квартальной сеткой `2014Q3–2025Q4` по всем компаниям из входной папки.
 - `spark_neftegaz_report_2014q3_2025q4.xlsx` — нефтегазовый SPARK workbook.
 - `spark_metallurgy_report_2014q3_2025q4.xlsx` — металлургический SPARK workbook.
+- `spark_metric_recovery_audit.xlsx` — отдельный audit-файл для строк СПАРК без `metric_code`, которые восстановлены по `metric_name + statement_section`.
 - `spark_sector_combined_2014q3_2025q4.xlsx` — объединенный SPARK workbook по обоим секторам с признаками `sector` и `sample_flag`.
 - `analysis_panel.xlsx` — итоговая исследовательская квартальная панель.
 - `model_ready_quarterly.xlsx` — квартальная панель для эконометрики.
@@ -58,6 +59,8 @@ PYTHONPATH=vendor python3 src/apply_manual_validation.py \
 Для работы без отчетностей удобнее открывать `public_market_data_full.xlsx`: там есть `firm_market_flags` и все публичные слои в одном месте. В `macro_cbr` теперь лежит не только ключевая ставка и инфляция, но и `USDRUB`.
 
 Для отчетностей по СПАРК удобнее открывать `spark_combined_report_2014q3_2025q4.xlsx`: там есть `panel_quarterly`, где каждая компания разложена по всем кварталам диапазона, а пропуски оставлены пустыми.
+
+Если нужно точечно забрать строки, которые раньше терялись из-за пустого `metric_code`, используйте `spark_metric_recovery_audit.xlsx`. Главные листы: `debt_recovery_wide` для ручной вставки долговых переменных и `recovery_needed_wide` для всех восстановленных core-показателей.
 
 Для ownership/state слоя удобнее открывать `ownership_state_table.xlsx`: там лежат `ownership_state_table`, `ownership_links`, `ownership_doc_inventory`, `ownership_parse_log`, `ownership_summary`.
 

@@ -88,6 +88,7 @@ CORE_METRIC_CODE_MAP = {
 
 CORE_METRIC_NAME_PATTERNS = [
     (re.compile(r"^баланс \(актив\)$", re.I), "assets_total"),
+    (re.compile(r"^баланс \(пассив\)$", re.I), "assets_total"),
     (re.compile(r"^основные средства$", re.I), "ppe"),
     (
         re.compile(r"^денежные средства и денежные эквиваленты$", re.I),
@@ -96,6 +97,9 @@ CORE_METRIC_NAME_PATTERNS = [
     (re.compile(r"^итого по разделу iii$", re.I), "equity"),
     (re.compile(r"^выручка$", re.I), "revenue"),
     (re.compile(r"^проценты к уплате$", re.I), "interest_expense"),
+    (re.compile(r"^проценты к получению$", re.I), "interest_income"),
+    (re.compile(r"^прибыль \(убыток\) до налогообложения$", re.I), "profit_before_tax"),
+    (re.compile(r"^прибыль \(убыток\) от продаж$", re.I), "operating_profit"),
     (re.compile(r"^чистая прибыль \(убыток\)$", re.I), "net_income"),
     (
         re.compile(r"^сальдо денежных потоков от текущих операций$", re.I),
@@ -107,6 +111,38 @@ CORE_METRIC_NAME_PATTERNS = [
             re.I,
         ),
         "capex",
+    ),
+    (re.compile(r"^сальдо денежных потоков от финансовых операций$", re.I), "financing_inflows"),
+    (re.compile(r"получени[ея].*(кредит|за[её]м)", re.I), "loans_received"),
+    (re.compile(r"выпуск[а-я\s]*(облигац|долгов)", re.I), "bonds_issued"),
+    (re.compile(r"(погашени[ея]|возврат).*(кредит|за[её]м|облигац|долгов)", re.I), "debt_repayment"),
+    (re.compile(r"процент[а-я\s]+по долговым обязательствам", re.I), "interest_paid"),
+]
+
+BALANCE_SECTION_METRIC_RULES = [
+    (
+        re.compile(r"^заемные средства$"),
+        re.compile(r"(^|\b)iv\b|долгосрочн"),
+        "debt_lt",
+        "metric_name_statement_section",
+    ),
+    (
+        re.compile(r"^заемные средства$"),
+        re.compile(r"(^|\b)v\b|краткосрочн"),
+        "debt_st",
+        "metric_name_statement_section",
+    ),
+    (
+        re.compile(r"долгосрочн.*(кредит|заем)"),
+        re.compile(r".*"),
+        "debt_lt",
+        "metric_name_statement_section",
+    ),
+    (
+        re.compile(r"краткосрочн.*(кредит|заем)"),
+        re.compile(r".*"),
+        "debt_st",
+        "metric_name_statement_section",
     ),
 ]
 
@@ -451,17 +487,46 @@ def detect_statement_section(metric_name: str, metric_code: str, value_cells: li
     return norm in {"актив", "пассив", "справочно", "справочно:"}
 
 
-def standardize_metric(table_title: str, metric_code: str, metric_name: str) -> str | None:
+def classify_metric(
+    table_title: str,
+    metric_code: str,
+    metric_name: str,
+    statement_section: str = "",
+) -> tuple[str | None, str, str]:
+    normalized_code = normalize_code(metric_code)
     if table_title in CORE_METRIC_CODE_MAP:
-        metric_std = CORE_METRIC_CODE_MAP[table_title].get(metric_code)
+        metric_std = CORE_METRIC_CODE_MAP[table_title].get(normalized_code)
         if metric_std:
-            return metric_std
+            return metric_std, "metric_code", "high"
 
     clean_name = clean_text(metric_name)
+    norm_name = normalize_text(clean_name)
+    norm_section = normalize_text(statement_section)
+
+    if table_title == "Бухгалтерский баланс":
+        for name_pattern, section_pattern, metric_std, method in BALANCE_SECTION_METRIC_RULES:
+            if name_pattern.search(norm_name) and section_pattern.search(norm_section):
+                return metric_std, method, "medium"
+
     for pattern, metric_std in CORE_METRIC_NAME_PATTERNS:
         if pattern.search(clean_name):
-            return metric_std
-    return None
+            return metric_std, "metric_name", "medium"
+    return None, "", ""
+
+
+def standardize_metric(
+    table_title: str,
+    metric_code: str,
+    metric_name: str,
+    statement_section: str = "",
+) -> str | None:
+    metric_std, _, _ = classify_metric(
+        table_title=table_title,
+        metric_code=metric_code,
+        metric_name=metric_name,
+        statement_section=statement_section,
+    )
+    return metric_std
 
 
 def build_log_row(
@@ -757,16 +822,40 @@ def build_panel_core(raw_long: pd.DataFrame) -> pd.DataFrame:
         return pd.DataFrame(columns=columns)
 
     current_values = raw_long.loc[raw_long["value_col_index"] == 0].copy()
-    current_values["metric_std"] = current_values.apply(
-        lambda row: standardize_metric(
+    metric_matches = current_values.apply(
+        lambda row: classify_metric(
             table_title=clean_text(row["table_title"]),
             metric_code=normalize_code(row["metric_code"]),
             metric_name=clean_text(row["metric_name"]),
+            statement_section=clean_text(row["statement_section"]),
         ),
         axis=1,
     )
+    current_values["metric_std"] = metric_matches.map(lambda value: value[0])
+    current_values["metric_match_method"] = metric_matches.map(lambda value: value[1])
+    current_values["metric_match_confidence"] = metric_matches.map(lambda value: value[2])
+    current_values["metric_match_priority"] = current_values["metric_match_method"].map(
+        {
+            "metric_code": 0,
+            "metric_name_statement_section": 1,
+            "metric_name": 2,
+        }
+    ).fillna(9)
 
     panel_source = current_values.loc[current_values["metric_std"].notna()].copy()
+    panel_source = panel_source.sort_values(
+        [
+            "source_file",
+            "company",
+            "inn",
+            "report_year",
+            "period_type",
+            "metric_std",
+            "metric_match_priority",
+            "value_col_index",
+        ],
+        kind="stable",
+    )
     index_columns = [
         "source_file",
         "company",
