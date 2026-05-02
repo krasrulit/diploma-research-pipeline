@@ -6,6 +6,8 @@
 
 - `main_spark.py` — короткая точка входа, вызывает `src.spark_docx_parser.main`.
 - `src/spark_docx_parser.py` — полный парсер СПАРК DOCX.
+- `main_spark_recovery_audit.py` — собирает audit workbook по строкам, которые можно восстановить без `metric_code`.
+- `main_spark_regression_patch.py` — превращает восстановленные строки в готовый файл-вставку для `regression_ready_final.xlsx`.
 - `main_analysis_panel.py` — объединяет готовые SPARK workbook по секторам с макро, commodities, ownership, Cbonds и public securities.
 - `main_model_ready.py` — превращает `analysis_panel.xlsx` в квартальную и годовую model-ready панели.
 
@@ -111,6 +113,23 @@ PYTHONPATH=vendor python3 main_spark_recovery_audit.py \
 - `debt_recovery_long` / `debt_recovery_wide` — отдельный блок только по `debt_lt` и `debt_st`;
 - `recovered_raw_values` — все raw-строки, распознанные по fallback-правилам;
 - `panel_before_after` — сравнение старого и нового core-слоя.
+
+Чтобы получить не отдельный debt-блок, а готовые строки для финального regression workbook по всем восстановленным показателям:
+
+```bash
+cd /Users/grigorijkrasovickij/Documents/Playground
+PYTHONPATH=vendor python3 main_spark_regression_patch.py \
+  --regression-ready "/Users/grigorijkrasovickij/Documents/Playground/data_processed/regression_ready_final.xlsx" \
+  --recovery-audit "/Users/grigorijkrasovickij/Documents/Playground/data_processed/spark_metric_recovery_audit.xlsx" \
+  --output "/Users/grigorijkrasovickij/Documents/Playground/data_processed/spark_regression_ready_patch.xlsx"
+```
+
+Этот файл не перезаписывает исходную модель. Он делает безопасный patch-layer:
+
+- заполняет только пустые финансовые значения из СПАРК;
+- не трогает уже заполненные значения;
+- пересчитывает `total_debt`, debt ratios, `net_debt`, `net_debt_to_assets`, `available_core_metrics_count`, `reporting_observed_flag` и другие зависимые поля;
+- сохраняет строки в листах `quarterly_patch_same_columns` и `annual_patch_same_columns` с теми же названиями и порядком колонок, что в `regression_ready_final.xlsx`.
 
 Для финальной модели основной файл проверки:
 

@@ -15,6 +15,7 @@
 - [main_ownership_state.py](/Users/grigorijkrasovickij/Documents/Playground/main_ownership_state.py) — сборка ownership/state слоя из raw СПАРК DOCX: дочерность, головная компания, inferred group и state/private flags.
 - [main_spark.py](/Users/grigorijkrasovickij/Documents/Playground/main_spark.py) — entrypoint для парсинга отчетов СПАРК.
 - [main_spark_recovery_audit.py](/Users/grigorijkrasovickij/Documents/Playground/main_spark_recovery_audit.py) — строит отдельный workbook с core-метриками, восстановленными из `metric_name + statement_section`, когда `metric_code` в СПАРК отсутствует.
+- [main_spark_regression_patch.py](/Users/grigorijkrasovickij/Documents/Playground/main_spark_regression_patch.py) — строит файл-вставку для `regression_ready_final.xlsx`: те же названия и порядок колонок, но заполнены все восстановленные SPARK-показатели и пересчитаны зависимые коэффициенты.
 - [main_analysis_panel.py](/Users/grigorijkrasovickij/Documents/Playground/main_analysis_panel.py) — сборка объединенного SPARK-workbook по секторам и итоговой исследовательской панели.
 - [main_model_ready.py](/Users/grigorijkrasovickij/Documents/Playground/main_model_ready.py) — финальный слой `model_ready_quarterly.xlsx` и `model_ready_annual.xlsx`.
 - [docs/SPARK_PIPELINE.md](/Users/grigorijkrasovickij/Documents/Playground/docs/SPARK_PIPELINE.md) — подробная инструкция по СПАРК-парсеру, входным файлам, листам и проверкам.
@@ -204,6 +205,23 @@ PYTHONPATH=vendor python3 main_spark_recovery_audit.py \
 - `recovered_raw_values` — все raw-строки, распознанные по fallback-правилам.
 - `panel_before_after` — сравнение старого и нового core-слоя.
 - `rule_summary` — сколько строк сработало по каждому правилу.
+
+Если нужно не просто посмотреть восстановленные значения, а получить готовые строки для вставки в файл регрессий:
+
+```bash
+cd /Users/grigorijkrasovickij/Documents/Playground
+PYTHONPATH=vendor python3 main_spark_regression_patch.py \
+  --regression-ready "/Users/grigorijkrasovickij/Documents/Playground/data_processed/regression_ready_final.xlsx" \
+  --recovery-audit "/Users/grigorijkrasovickij/Documents/Playground/data_processed/spark_metric_recovery_audit.xlsx" \
+  --output "/Users/grigorijkrasovickij/Documents/Playground/data_processed/spark_regression_ready_patch.xlsx"
+```
+
+В `spark_regression_ready_patch.xlsx` главные листы:
+
+- `quarterly_patch_same_columns` — квартальные строки с теми же колонками и в том же порядке, что `quarterly_panel` в `regression_ready_final.xlsx`.
+- `annual_patch_same_columns` — годовые строки с теми же колонками и в том же порядке, что `annual_panel`.
+- `quarterly_changes_long` / `annual_changes_long` — audit каждой измененной ячейки: старое значение, новое значение, direct/derived тип изменения и raw evidence из СПАРК.
+- `recovered_financial_wide` — компактный широкий блок только с финансовыми уровнями.
 
 ```bash
 cd /Users/grigorijkrasovickij/Documents/Playground
